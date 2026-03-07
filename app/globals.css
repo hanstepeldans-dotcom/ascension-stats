@@ -1,0 +1,167 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 222.2 84% 4.9%;
+    --card: 0 0% 100%;
+    --card-foreground: 222.2 84% 4.9%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222.2 84% 4.9%;
+    --primary: 222.2 47.4% 11.2%;
+    --primary-foreground: 210 40% 98%;
+    --secondary: 210 40% 96.1%;
+    --secondary-foreground: 222.2 47.4% 11.2%;
+    --muted: 210 40% 96.1%;
+    --muted-foreground: 215.4 16.3% 46.9%;
+    --accent: 210 40% 96.1%;
+    --accent-foreground: 222.2 47.4% 11.2%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 214.3 31.8% 91.4%;
+    --input: 214.3 31.8% 91.4%;
+    --ring: 222.2 84% 4.9%;
+    --radius: 0.5rem;
+    /* Ascension Stats brand (light fallback) */
+    --pink: 330 81% 60%;
+    --pink-muted: 330 60% 45%;
+  }
+
+  .dark,
+  .ascension-dark {
+    --background: 0 0% 4%;
+    --foreground: 0 0% 98%;
+    --card: 0 0% 6%;
+    --card-foreground: 0 0% 98%;
+    --popover: 0 0% 6%;
+    --popover-foreground: 0 0% 98%;
+    --primary: 330 81% 60%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 0 0% 12%;
+    --secondary-foreground: 0 0% 98%;
+    --muted: 0 0% 14%;
+    --muted-foreground: 0 0% 65%;
+    --accent: 330 50% 25%;
+    --accent-foreground: 0 0% 98%;
+    --destructive: 0 62.8% 50%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 0 0% 12%;
+    --input: 0 0% 12%;
+    --ring: 330 81% 60%;
+    --pink: 330 81% 60%;
+    --pink-muted: 330 60% 45%;
+  }
+}
+
+@layer base {
+  body {
+    @apply bg-background text-foreground;
+  }
+}
+
+/*
+ * Ascension Stats: clean premium background (no grid, no lines, no squares).
+ * - Base: near-black. Glows: 2 radial gradients (pink top-right, pink/purple bottom-left).
+ */
+@layer utilities {
+  /* Clean background: base + glows (::before). No grid, no noise tile. */
+  .asc-background {
+    position: relative;
+    min-height: 100vh;
+    background-color: #07070a;
+  }
+  .asc-background::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+    background-image:
+      radial-gradient(
+        ellipse 70% 50% at 85% 15%,
+        hsl(330 75% 55% / 0.18) 0%,
+        transparent 50%
+      ),
+      radial-gradient(
+        ellipse 60% 45% at 15% 85%,
+        hsl(300 50% 45% / 0.12) 0%,
+        transparent 50%
+      );
+  }
+
+  .bg-ascension {
+    background-color: #07070a;
+  }
+
+  .glass {
+    @apply rounded-xl border border-white/[0.1] bg-white/[0.04] backdrop-blur-xl;
+  }
+  .glass-panel {
+    @apply rounded-xl border border-white/[0.08] bg-white/[0.03] backdrop-blur-xl;
+  }
+  .glass-panel-strong {
+    @apply rounded-xl border border-white/[0.12] bg-white/[0.06] backdrop-blur-xl;
+  }
+  .glow-pink {
+    box-shadow: 0 0 40px -8px hsl(330 81% 60% / 0.35);
+  }
+  .pink-glow-border {
+    box-shadow: 0 0 0 1px hsl(330 81% 60% / 0.2);
+  }
+  .gradient-text-pink {
+    @apply bg-clip-text text-transparent;
+    background-image: linear-gradient(135deg, hsl(330 81% 70%), hsl(340 90% 65%));
+  }
+  .btn-sheen {
+    position: relative;
+    overflow: hidden;
+  }
+  .btn-sheen::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(105deg, transparent 40%, rgba(255,255,255,0.15) 50%, transparent 60%);
+    transform: translateX(-100%);
+    transition: transform 0.5s ease;
+  }
+  .btn-sheen:hover::after {
+    transform: translateX(100%);
+  }
+}
+
+/* Keyframe animations */
+@keyframes float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-8px); }
+}
+@keyframes float-slow {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-4px); }
+}
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+@keyframes pulse-glow {
+  0%, 100% { opacity: 0.08; }
+  50% { opacity: 1; }
+}
+@keyframes asc-pulse-ring {
+  0%, 100% { opacity: 0.4; transform: scale(1); }
+  50% { opacity: 0.8; transform: scale(1.02); }
+}
+
+.animate-float {
+  animation: float 6s ease-in-out infinite;
+}
+.animate-float-slow {
+  animation: float-slow 8s ease-in-out infinite;
+}
+.animate-pulse-glow {
+  animation: pulse-glow 4s ease-in-out infinite;
+}
+.animate-asc-pulse-ring {
+  animation: asc-pulse-ring 2.5s ease-in-out infinite;
+}

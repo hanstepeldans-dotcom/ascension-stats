@@ -1,0 +1,158 @@
+// Prisma schema for Unified Creator Stats
+// Default: SQLite (no Docker). For Postgres: change provider to "postgresql" and set DATABASE_URL.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  MANAGER
+}
+
+model User {
+  id           String    @id @default(cuid())
+  email        String    @unique
+  name         String?
+  passwordHash String
+  role         Role      @default(MANAGER)
+  createdAt    DateTime  @default(now())
+
+  providerConnections      ProviderConnection[]
+  statSnapshots           StatSnapshot[]
+  combinedSnapshots       CombinedSnapshot[]
+  dailyStats              DailyStat[]
+  agencyDailyRevenues     AgencyDailyRevenue[]
+  fanvueCreators          FanvueCreator[]
+
+  @@map("users")
+}
+
+model DailyStat {
+  id           String   @id @default(cuid())
+  userId       String
+  provider     String   // "INFLOWW" | "FANVUE"
+  date         String   // YYYY-MM-DD
+  revenueCents Int      @default(0)
+  createdAt    DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, provider, date])
+  @@index([userId, date])
+  @@map("daily_stats")
+}
+
+model ProviderConnection {
+  id                   String    @id @default(cuid())
+  userId               String
+  provider             String    // "INFLOWW" | "FANVUE"
+  status               String    // CONNECTED | DISCONNECTED | ERROR
+  accessToken          String?
+  refreshToken         String?
+  oauthState           String?   @unique // OAuth state param; cleared after use
+  oauthStateExpiresAt  DateTime?
+  pkceVerifier         String?   // PKCE code_verifier; cleared after token exchange
+  pkceVerifierExpiresAt DateTime?
+  connectedAt          DateTime?
+  lastError            String?   // Short sanitized error message when status=ERROR
+  lastDebugJson        Json?     // Token exchange diagnostics (dev-only, no secrets)
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, provider])
+  @@index([userId])
+  @@index([userId, provider])
+  @@map("provider_connections")
+}
+
+model StatSnapshot {
+  id         String   @id @default(cuid())
+  userId     String
+  provider   String   // "INFLOWW" | "FANVUE"
+  periodStart DateTime
+  periodEnd   DateTime
+  rawJson    Json     // provider-specific raw data
+  createdAt  DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([userId, provider])
+  @@index([userId, periodStart, periodEnd])
+  @@map("stat_snapshots")
+}
+
+model CombinedSnapshot {
+  id          String   @id @default(cuid())
+  userId      String
+  periodStart DateTime
+  periodEnd   DateTime
+  metricsJson Json     // unified combined metrics
+  createdAt   DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([userId, periodStart, periodEnd])
+  @@map("combined_snapshots")
+}
+
+model AgencyDailyRevenue {
+  id        String   @id @default(cuid())
+  userId    String
+  date      DateTime // date-only (stored as start of day UTC)
+  fanvue    Float    @default(0)
+  infloww   Float    @default(0)
+  total     Float    @default(0)
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, date])
+  @@index([userId])
+  @@index([userId, date])
+  @@map("agency_daily_revenues")
+}
+
+model FanvueCreator {
+  id          String   @id @default(cuid())
+  userId      String
+  fanvueUuid  String
+  handle      String?
+  displayName String?
+  avatarUrl   String?
+  createdAt   DateTime @default(now())
+
+  user     User                         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  earnings FanvueCreatorDailyEarnings[]
+
+  @@unique([userId, fanvueUuid])
+  @@index([userId])
+  @@map("fanvue_creators")
+}
+
+model FanvueCreatorDailyEarnings {
+  id             String   @id @default(cuid())
+  creatorId      String
+  date          DateTime // date-only (start of day UTC)
+  total         Float    @default(0)
+  messages      Float    @default(0)
+  tips          Float    @default(0)
+  subscriptions Float    @default(0)
+  createdAt     DateTime @default(now())
+
+  creator FanvueCreator @relation(fields: [creatorId], references: [id], onDelete: Cascade)
+
+  @@unique([creatorId, date])
+  @@index([creatorId])
+  @@index([creatorId, date])
+  @@map("fanvue_creator_daily_earnings")
+}
