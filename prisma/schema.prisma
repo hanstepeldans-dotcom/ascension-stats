@@ -123,13 +123,15 @@ model AgencyDailyRevenue {
 }
 
 model FanvueCreator {
-  id          String   @id @default(cuid())
-  userId      String
-  fanvueUuid  String
-  handle      String?
-  displayName String?
-  avatarUrl   String?
-  createdAt   DateTime @default(now())
+  id                       String    @id @default(cuid())
+  userId                   String
+  fanvueUuid               String
+  handle                   String?
+  displayName              String?
+  avatarUrl                String?
+  totalSubscribers         Int?
+  totalSubscribersAsOf     DateTime?
+  createdAt                DateTime  @default(now())
 
   user     User                         @relation(fields: [userId], references: [id], onDelete: Cascade)
   earnings FanvueCreatorDailyEarnings[]

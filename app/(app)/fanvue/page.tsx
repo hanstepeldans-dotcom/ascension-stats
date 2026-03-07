@@ -10,6 +10,7 @@ import {
   type MetricTypeValue,
 } from "@/components/overview/EarningsOverviewLayout";
 import { ModelsEarningsTable } from "@/components/overview/ModelsEarningsTable";
+import { ChattingAnalyticsTable } from "@/components/overview/ChattingAnalyticsTable";
 
 const PERIOD_LABELS: Record<PeriodValue, string> = {
   yesterday: "Yesterday",
@@ -70,13 +71,25 @@ export default function FanvuePage() {
       );
       if (!res.ok) throw new Error("Failed to fetch model earnings");
       const json = await res.json();
-      return json as { models: { modelId: string; modelName: string; total: number; messages: number; tips: number; subscriptions: number }[] };
+      return json as { models: { modelId: string; modelName: string; total: number; messages: number; tips: number; subscriptions: number; totalSubscribers: number | null }[] };
     },
   });
 
   const modelRows = useMemo(
     () => modelsData?.models ?? [],
     [modelsData?.models]
+  );
+
+  const chattingRows = useMemo(
+    () =>
+      modelRows.map((r) => ({
+        modelId: r.modelId,
+        modelName: r.modelName,
+        newSubscribers: r.totalSubscribers ?? 0,
+        cancelledSubscribers: 0,
+        netSubscribers: 0,
+      })),
+    [modelRows]
   );
 
   return (
@@ -94,6 +107,10 @@ export default function FanvuePage() {
         rows={modelRows}
         periodLabel={PERIOD_LABELS[period]}
         metricTypeLabel={METRIC_TYPE_LABELS[metricType]}
+      />
+      <ChattingAnalyticsTable
+        rows={chattingRows}
+        periodLabel={PERIOD_LABELS[period]}
       />
       {isAdminDev && (
         <p className="text-xs text-zinc-500">

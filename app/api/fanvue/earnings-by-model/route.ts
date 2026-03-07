@@ -14,6 +14,7 @@ export interface ModelEarningsResponse {
   messages: number;
   tips: number;
   subscriptions: number;
+  totalSubscribers: number | null;
 }
 
 /**
@@ -41,6 +42,7 @@ export async function GET(request: Request) {
       fanvueUuid: true,
       handle: true,
       displayName: true,
+      totalSubscribers: true,
       earnings: {
         where: {
           date: { gte: range.startDateUtc, lte: range.endDateUtc },
@@ -75,6 +77,7 @@ export async function GET(request: Request) {
       messages: Math.round(messages * mult * 100) / 100,
       tips: Math.round(tips * mult * 100) / 100,
       subscriptions: Math.round(subscriptions * mult * 100) / 100,
+      totalSubscribers: c.totalSubscribers ?? null,
     };
   });
 

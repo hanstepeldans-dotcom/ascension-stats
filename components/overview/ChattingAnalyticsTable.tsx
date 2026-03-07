@@ -10,35 +10,25 @@ import {
 } from "@/components/ui/table";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
-const CURRENCY_FORMAT = new Intl.NumberFormat("en-US", {
-  style: "currency",
-  currency: "USD",
-  minimumFractionDigits: 2,
-  maximumFractionDigits: 2,
-});
-
-export interface ModelEarningsRow {
+export interface ChattingAnalyticsRow {
   modelId: string;
   modelName: string;
-  total: number;
-  messages: number;
-  tips: number;
-  subscriptions: number;
+  newSubscribers: number;
+  cancelledSubscribers: number;
+  netSubscribers: number;
 }
 
-interface ModelsEarningsTableProps {
-  rows: ModelEarningsRow[];
+interface ChattingAnalyticsTableProps {
+  rows: ChattingAnalyticsRow[];
   periodLabel?: string;
-  metricTypeLabel?: string;
   className?: string;
 }
 
-export function ModelsEarningsTable({
+export function ChattingAnalyticsTable({
   rows,
   periodLabel = "This week",
-  metricTypeLabel = "Net earnings",
   className,
-}: ModelsEarningsTableProps) {
+}: ChattingAnalyticsTableProps) {
   return (
     <Card
       className={
@@ -47,10 +37,8 @@ export function ModelsEarningsTable({
       }
     >
       <CardHeader>
-        <CardTitle className="text-white">Earnings by model</CardTitle>
-        <p className="text-xs text-zinc-500">
-          {metricTypeLabel} · {periodLabel}
-        </p>
+        <CardTitle className="text-white">Chatting analytics</CardTitle>
+        <p className="text-xs text-zinc-500">{periodLabel}</p>
       </CardHeader>
       <CardContent>
         <Table className="table-fixed w-full">
@@ -58,16 +46,14 @@ export function ModelsEarningsTable({
             <TableRow className="border-white/10 hover:bg-transparent">
               <TableHead className="text-zinc-400 font-medium w-[32%]">Model</TableHead>
               <TableHead className="text-left text-zinc-400 font-medium w-[17%]">
-                Total earnings
+                Subs
+              </TableHead>
+              <TableHead className="w-[17%]" />
+              <TableHead className="text-left text-zinc-400 font-medium w-[17%]">
+                Chatting Ratio
               </TableHead>
               <TableHead className="text-left text-zinc-400 font-medium w-[17%]">
-                Messages
-              </TableHead>
-              <TableHead className="text-left text-zinc-400 font-medium w-[17%]">
-                Tips
-              </TableHead>
-              <TableHead className="text-left text-zinc-400 font-medium w-[17%]">
-                Subscriber
+                LTV
               </TableHead>
             </TableRow>
           </TableHeader>
@@ -78,7 +64,7 @@ export function ModelsEarningsTable({
                   colSpan={5}
                   className="text-center text-zinc-500 py-8"
                 >
-                  No model data for this period.
+                  No chatting data for this period.
                 </TableCell>
               </TableRow>
             ) : (
@@ -90,17 +76,20 @@ export function ModelsEarningsTable({
                   <TableCell className="font-medium text-white">
                     {row.modelName}
                   </TableCell>
-                  <TableCell className="text-left text-white">
-                    {CURRENCY_FORMAT.format(row.total)}
-                  </TableCell>
                   <TableCell className="text-left text-zinc-300">
-                    {CURRENCY_FORMAT.format(row.messages)}
+                    {row.newSubscribers.toLocaleString("en-US")}
                   </TableCell>
+                  <TableCell />
                   <TableCell className="text-left text-zinc-300">
-                    {CURRENCY_FORMAT.format(row.tips)}
+                    {row.cancelledSubscribers.toLocaleString("en-US")}
                   </TableCell>
-                  <TableCell className="text-left text-zinc-300">
-                    {CURRENCY_FORMAT.format(row.subscriptions)}
+                  <TableCell
+                    className={`text-left font-medium ${
+                      row.netSubscribers >= 0 ? "text-emerald-400" : "text-red-400"
+                    }`}
+                  >
+                    {row.netSubscribers >= 0 ? "+" : ""}
+                    {row.netSubscribers.toLocaleString("en-US")}
                   </TableCell>
                 </TableRow>
               ))
