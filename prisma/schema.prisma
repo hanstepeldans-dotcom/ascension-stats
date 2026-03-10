@@ -1,12 +1,11 @@
 // Prisma schema for Unified Creator Stats
-// Default: SQLite (no Docker). For Postgres: change provider to "postgresql" and set DATABASE_URL.
 
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
