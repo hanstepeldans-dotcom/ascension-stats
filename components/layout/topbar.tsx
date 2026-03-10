@@ -10,6 +10,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { LogOut } from "lucide-react";
+import { FullscreenButton } from "@/components/ui/fullscreen-button";
 
 interface TopbarProps {
   user?: { name?: string | null; email?: string | null } | null;
@@ -28,6 +29,7 @@ export function Topbar({ user }: TopbarProps) {
   return (
     <header className="flex h-14 items-center justify-between border-b border-white/[0.08] bg-black/40 px-4 backdrop-blur-xl">
       <div className="flex-1" />
+      <FullscreenButton />
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button
