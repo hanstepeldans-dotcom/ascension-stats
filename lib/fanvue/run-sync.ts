@@ -89,51 +89,6 @@ function parseEarningsItems(payload: unknown): { date: Date; amountCents: number
   return out;
 }
 
-/**
- * Fetch the latest total subscriber count for a creator from Fanvue.
- * Uses /creators/:uuid/insights/subscribers with a 7-day lookback.
- * Returns the total from the most recent daily row, or null if unavailable.
- */
-async function fetchLatestSubscriberTotal(
-  creatorUuid: string,
-  accessToken: string
-): Promise<{ total: number; asOf: Date } | null> {
-  const end = new Date();
-  const start = new Date(end.getTime() - 7 * 24 * 60 * 60 * 1000);
-  const q = new URLSearchParams({
-    startDate: start.toISOString(),
-    endDate: end.toISOString(),
-    size: "10",
-  });
-  try {
-    const payload = await fanvueFetch<unknown>(
-      `/creators/${encodeURIComponent(creatorUuid)}/insights/subscribers?${q.toString()}`,
-      accessToken
-    );
-    const arr = getEarningsArray(payload);
-    if (arr.length === 0) return null;
-    // Pick the row with the latest date
-    let latestDate: Date | null = null;
-    let latestTotal = 0;
-    for (const item of arr) {
-      if (!item || typeof item !== "object") continue;
-      const obj = item as Record<string, unknown>;
-      const dateRaw = obj.date;
-      const total = typeof obj.total === "number" ? obj.total : null;
-      if (!dateRaw || total === null) continue;
-      const d = new Date(dateRaw as string);
-      if (Number.isNaN(d.getTime())) continue;
-      if (latestDate === null || d > latestDate) {
-        latestDate = d;
-        latestTotal = total;
-      }
-    }
-    if (latestDate === null) return null;
-    return { total: latestTotal, asOf: latestDate };
-  } catch {
-    return null;
-  }
-}
 
 export interface RunFanvueSyncResult {
   ok: boolean;
@@ -270,18 +225,6 @@ export async function runFanvueSync(
         where: { userId_date: { userId, date } },
         create: { userId, date, fanvue: revenue, infloww, total },
         update: { fanvue: revenue, infloww, total },
-      });
-    }
-
-    // Fetch and store latest total subscriber count for this creator
-    const subSnap = await fetchLatestSubscriberTotal(creatorUuid, accessToken);
-    if (subSnap !== null) {
-      await prisma.fanvueCreator.update({
-        where: { id: creatorId },
-        data: {
-          totalSubscribers: subSnap.total,
-          totalSubscribersAsOf: subSnap.asOf,
-        },
       });
     }
 
@@ -440,18 +383,6 @@ export async function runFanvueRebuild(
         where: { userId_date: { userId, date } },
         create: { userId, date, fanvue: revenue, infloww: 0, total: revenue },
         update: { fanvue: revenue, infloww: 0, total: revenue },
-      });
-    }
-
-    // Fetch and store latest total subscriber count for this creator
-    const subSnap = await fetchLatestSubscriberTotal(creatorUuid, accessToken);
-    if (subSnap !== null) {
-      await prisma.fanvueCreator.update({
-        where: { id: creatorId },
-        data: {
-          totalSubscribers: subSnap.total,
-          totalSubscribersAsOf: subSnap.asOf,
-        },
       });
     }
 

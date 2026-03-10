@@ -14,7 +14,7 @@ export interface ChattingAnalyticsRow {
   modelId: string;
   modelName: string;
   newSubscribers: number;
-  cancelledSubscribers: number;
+  chattingRatio: number;
   netSubscribers: number;
 }
 
@@ -22,12 +22,14 @@ interface ChattingAnalyticsTableProps {
   rows: ChattingAnalyticsRow[];
   periodLabel?: string;
   className?: string;
+  onSubsChange?: (modelId: string, value: number) => void;
 }
 
 export function ChattingAnalyticsTable({
   rows,
   periodLabel = "This week",
   className,
+  onSubsChange,
 }: ChattingAnalyticsTableProps) {
   return (
     <Card
@@ -76,19 +78,24 @@ export function ChattingAnalyticsTable({
                   <TableCell className="font-medium text-white">
                     {row.modelName}
                   </TableCell>
-                  <TableCell className="text-left text-zinc-300">
-                    {row.newSubscribers.toLocaleString("en-US")}
+                  <TableCell className="text-left text-zinc-300 py-0">
+                    <input
+                      type="number"
+                      min={0}
+                      value={row.newSubscribers || ""}
+                      placeholder="—"
+                      onChange={(e) => {
+                        const v = parseInt(e.target.value, 10);
+                        onSubsChange?.(row.modelId, Number.isNaN(v) ? 0 : v);
+                      }}
+                      className="w-full bg-transparent text-zinc-300 placeholder-zinc-600 outline-none py-3 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                    />
                   </TableCell>
                   <TableCell />
                   <TableCell className="text-left text-zinc-300">
-                    {row.cancelledSubscribers.toLocaleString("en-US")}
+                    {row.chattingRatio.toFixed(2)}
                   </TableCell>
-                  <TableCell
-                    className={`text-left font-medium ${
-                      row.netSubscribers >= 0 ? "text-emerald-400" : "text-red-400"
-                    }`}
-                  >
-                    {row.netSubscribers >= 0 ? "+" : ""}
+                  <TableCell className="text-left text-zinc-300">
                     {row.netSubscribers.toLocaleString("en-US")}
                   </TableCell>
                 </TableRow>

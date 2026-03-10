@@ -29,6 +29,8 @@ model User {
   dailyStats              DailyStat[]
   agencyDailyRevenues     AgencyDailyRevenue[]
   fanvueCreators          FanvueCreator[]
+  inflowwEarnings         InflowwCreatorDailyEarnings[]
+  inflowwUploadMeta       InflowwUploadMeta?
 
   @@map("users")
 }
@@ -139,6 +141,53 @@ model FanvueCreator {
   @@unique([userId, fanvueUuid])
   @@index([userId])
   @@map("fanvue_creators")
+}
+
+/// Stores header mapping + sample rows from the most recent Infloww CSV upload.
+/// One record per user, upserted on every upload.
+model InflowwUploadMeta {
+  id              String   @id @default(cuid())
+  userId          String   @unique
+  fileName        String
+  /// JSON: string[] — raw header strings from the CSV
+  rawHeaders      Json
+  /// JSON: Record<fieldKey, csvHeader> — which CSV column mapped to each normalized field
+  mappedFields    Json
+  /// JSON: Record<string,string>[] — first 5 raw CSV rows (header→value)
+  firstRowsRaw    Json
+  /// JSON: InflowwParsedRow[] — first 5 parsed rows after normalization
+  firstRowsMapped Json
+  /// JSON: string[] — warning messages generated during parse (e.g. suspicious rows)
+  warnings        Json
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("infloww_upload_meta")
+}
+
+model InflowwCreatorDailyEarnings {
+  id            String   @id @default(cuid())
+  userId        String
+  creatorName   String
+  date          DateTime // date-only (start of day UTC)
+  total         Float    @default(0)
+  subscriptions Float    @default(0)
+  messages      Float    @default(0)
+  tips          Float    @default(0)
+  posts         Float    @default(0)
+  referrals     Float    @default(0)
+  streams       Float    @default(0)
+  subscribers   Int      @default(0)
+  createdAt     DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, creatorName, date])
+  @@index([userId])
+  @@index([userId, date])
+  @@map("infloww_creator_daily_earnings")
 }
 
 model FanvueCreatorDailyEarnings {

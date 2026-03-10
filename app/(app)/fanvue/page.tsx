@@ -24,10 +24,29 @@ const METRIC_TYPE_LABELS: Record<MetricTypeValue, string> = {
   gross: "Gross earnings",
 };
 
+const MANUAL_SUBS_KEY = "fanvue-manual-subs";
+
 export default function FanvuePage() {
   const { data: session } = useSession();
   const [period, setPeriod] = useState<PeriodValue>("week");
   const [metricType, setMetricType] = useState<MetricTypeValue>("net");
+
+  const [manualSubs, setManualSubs] = useState<Record<string, number>>(() => {
+    if (typeof window === "undefined") return {};
+    try {
+      return JSON.parse(localStorage.getItem(MANUAL_SUBS_KEY) ?? "{}") as Record<string, number>;
+    } catch {
+      return {};
+    }
+  });
+
+  const handleSubsChange = (modelId: string, value: number) => {
+    setManualSubs((prev) => {
+      const next = { ...prev, [modelId]: value };
+      localStorage.setItem(MANUAL_SUBS_KEY, JSON.stringify(next));
+      return next;
+    });
+  };
   const isAdminDev =
     process.env.NODE_ENV !== "production" && session?.user?.role === "ADMIN";
 
@@ -85,11 +104,15 @@ export default function FanvuePage() {
       modelRows.map((r) => ({
         modelId: r.modelId,
         modelName: r.modelName,
-        newSubscribers: r.totalSubscribers ?? 0,
-        cancelledSubscribers: 0,
-        netSubscribers: 0,
+        newSubscribers: manualSubs[r.modelId] ?? 0,
+        chattingRatio: r.subscriptions > 0
+          ? Math.round(((r.messages + r.tips) / r.subscriptions) * 100) / 100
+          : 0,
+        netSubscribers: (manualSubs[r.modelId] ?? 0) > 0
+          ? Math.round(((r.messages + r.tips) / (manualSubs[r.modelId] ?? 0)) * 100) / 100
+          : 0,
       })),
-    [modelRows]
+    [modelRows, manualSubs]
   );
 
   return (
@@ -111,6 +134,7 @@ export default function FanvuePage() {
       <ChattingAnalyticsTable
         rows={chattingRows}
         periodLabel={PERIOD_LABELS[period]}
+        onSubsChange={handleSubsChange}
       />
       {isAdminDev && (
         <p className="text-xs text-zinc-500">

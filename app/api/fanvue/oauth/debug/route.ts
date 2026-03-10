@@ -1,5 +1,5 @@
 import { getServerSession } from "next-auth";
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { randomBytes } from "node:crypto";
 import { authOptions } from "@/lib/auth/config";
 import {
@@ -12,9 +12,9 @@ import {
 
 /**
  * GET /api/fanvue/oauth/debug – return the built authorize URL (no secrets). Dev only. Auth required.
- * Use to confirm redirect_uri, scope, state, code_challenge are correct.
+ * Supports ?fresh=1 to preview the URL that would be generated with prompt=consent + max_age=0.
  */
-export async function GET() {
+export async function GET(req: NextRequest) {
   if (process.env.NODE_ENV === "production") {
     return NextResponse.json({ error: "Not available in production" }, { status: 404 });
   }
@@ -33,10 +33,13 @@ export async function GET() {
     );
   }
 
+  const fresh = req.nextUrl.searchParams.get("fresh") === "1";
+
   const state = randomBytes(8).toString("hex");
   const verifier = generateCodeVerifier();
   const challenge = computeCodeChallenge(verifier);
-  const authorizeUrl = buildFanvueAuthUrl(state, challenge);
+  const freshOptions = fresh ? { prompt: "consent", maxAge: 0 } : undefined;
+  const authorizeUrl = buildFanvueAuthUrl(state, challenge, freshOptions);
   const redirectUri = getFanvueRedirectUri();
   const env = getFanvueOAuthEnv();
   const requiredScopes = "openid offline_access offline";
@@ -50,5 +53,8 @@ export async function GET() {
     hasState: true,
     hasCodeChallenge: true,
     codeChallengeMethod: "S256",
+    prompt: freshOptions?.prompt ?? null,
+    maxAge: freshOptions?.maxAge ?? null,
+    freshMode: fresh,
   });
 }

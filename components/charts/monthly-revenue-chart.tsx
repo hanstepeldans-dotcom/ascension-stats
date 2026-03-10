@@ -47,14 +47,7 @@ export function MonthlyRevenueChart({ data, className }: MonthlyRevenueChartProp
     fanvue: centsToDollars(d.fanvueCents),
   }));
 
-  const maxVal = chartData.length
-    ? Math.max(
-        ...chartData.flatMap((d) => [d.agency, d.infloww, d.fanvue]),
-        0
-      )
-    : 0;
-  const yDomainMax = maxVal <= 0 ? 100 : Math.ceil((maxVal * 1.1) / 50000) * 50000;
-  const yDomain: [number, number] = [0, yDomainMax];
+  const yDomain: [number, number] = [0, 20000];
 
   return (
     <div className={className ?? "h-[300px] w-full"}>

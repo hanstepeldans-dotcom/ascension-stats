@@ -70,8 +70,19 @@ export function getRequestedScopeString(): string {
   }
 }
 
+export interface FanvueAuthUrlOptions {
+  /** prompt value forwarded to the authorization endpoint (e.g. "consent"). */
+  prompt?: string;
+  /** max_age in seconds forwarded to the authorization endpoint (0 = always re-authenticate). */
+  maxAge?: number;
+}
+
 /** Build the authorization URL with PKCE (code_challenge + code_challenge_method=S256). */
-export function buildFanvueAuthUrl(state: string, codeChallenge: string): string {
+export function buildFanvueAuthUrl(
+  state: string,
+  codeChallenge: string,
+  options?: FanvueAuthUrlOptions
+): string {
   const env = getFanvueOAuthEnv();
   const redirectUri = getFanvueRedirectUri();
   const scope = getFullScopeString(env.scopes);
@@ -84,6 +95,12 @@ export function buildFanvueAuthUrl(state: string, codeChallenge: string): string
     code_challenge: codeChallenge,
     code_challenge_method: "S256",
   });
+  if (options?.prompt !== undefined) {
+    params.set("prompt", options.prompt);
+  }
+  if (options?.maxAge !== undefined) {
+    params.set("max_age", String(options.maxAge));
+  }
   const sep = env.authorizationUrl.includes("?") ? "&" : "?";
   return `${env.authorizationUrl}${sep}${params.toString()}`;
 }

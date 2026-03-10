@@ -196,6 +196,19 @@ function SettingsContent() {
   const [exploreData, setExploreData] = useState<ExploreResponse | null>(null);
   const [exploreError, setExploreError] = useState<string | null>(null);
   const [reconnectLoading, setReconnectLoading] = useState(false);
+  const [inflowwUploadOpen, setInflowwUploadOpen] = useState(false);
+  const [inflowwFile, setInflowwFile] = useState<File | null>(null);
+  const [inflowwDragging, setInflowwDragging] = useState(false);
+  const [inflowwUploading, setInflowwUploading] = useState(false);
+  const [inflowwUploadError, setInflowwUploadError] = useState<string | null>(null);
+  const [inflowwConnected, setInflowwConnected] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return !!localStorage.getItem("infloww-file-name");
+  });
+  const [inflowwFileName, setInflowwFileName] = useState(() => {
+    if (typeof window === "undefined") return "";
+    return localStorage.getItem("infloww-file-name") ?? "";
+  });
 
   const { data, isLoading } = useQuery({
     queryKey: ["settings", "connections"],
@@ -694,6 +707,20 @@ function SettingsContent() {
                       {reconnectLoading ? "Reconnecting…" : "Reconnect"}
                     </Button>
                   )}
+                  {fanvueConnected && session?.user?.role === "ADMIN" && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="border-amber-500/40 text-amber-400 hover:bg-amber-500/10 hover:text-amber-300"
+                      disabled={reconnectLoading || disconnectMutation.isPending}
+                      onClick={() => {
+                        window.location.href = "/api/fanvue/oauth/start?fresh=1";
+                      }}
+                      title="Clears local token state and adds prompt=consent + max_age=0 to force a new Fanvue approval screen."
+                    >
+                      Force fresh Fanvue auth
+                    </Button>
+                  )}
                   {fanvueConnected ? (
                     <Button
                       variant="outline"
@@ -969,16 +996,157 @@ function SettingsContent() {
                 </DialogContent>
               </Dialog>
 
-              {/* Infloww placeholder */}
-              <div className="flex flex-col gap-4 rounded-lg border border-white/10 p-4 opacity-60 sm:flex-row sm:items-center sm:justify-between">
+              {/* Infloww */}
+              <div className="flex flex-col gap-4 rounded-lg border border-white/10 p-4 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                   <p className="font-medium text-white">Infloww</p>
-                  <p className="text-sm text-zinc-500">Coming soon</p>
+                  {inflowwConnected ? (
+                    <div className="mt-1 flex items-center gap-2">
+                      <Badge className="border-transparent bg-emerald-500/20 text-emerald-400">Connected</Badge>
+                      <span className="text-xs text-zinc-500 truncate max-w-[200px]">{inflowwFileName}</span>
+                    </div>
+                  ) : (
+                    <p className="text-sm text-zinc-500">Upload your Infloww data export to sync analytics.</p>
+                  )}
                 </div>
-                <Button variant="outline" className="border-white/20" disabled>
-                  Connect
-                </Button>
+                <div className="flex gap-2">
+                  {inflowwConnected && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="border-white/20 text-zinc-300 hover:bg-white/10 hover:text-white"
+                      onClick={() => {
+                        localStorage.removeItem("infloww-file-name");
+                        setInflowwConnected(false);
+                        setInflowwFileName("");
+                      }}
+                    >
+                      Disconnect
+                    </Button>
+                  )}
+                  <Button
+                    className={inflowwConnected
+                      ? "border border-white/20 bg-transparent text-zinc-300 hover:bg-white/10 hover:text-white"
+                      : "bg-gradient-to-r from-pink to-pink-muted text-white hover:opacity-90"}
+                    onClick={() => {
+                      setInflowwFile(null);
+                      setInflowwUploadOpen(true);
+                    }}
+                  >
+                    {inflowwConnected ? "Re-upload" : "Connect"}
+                  </Button>
+                </div>
               </div>
+
+              {/* Infloww upload dialog */}
+              <Dialog
+                open={inflowwUploadOpen}
+                onOpenChange={(open) => {
+                  setInflowwUploadOpen(open);
+                  if (!open) { setInflowwFile(null); setInflowwUploadError(null); }
+                }}
+              >
+                <DialogContent className="max-w-md border-white/10 bg-zinc-900">
+                  <DialogHeader>
+                    <DialogTitle className="text-white">Connect Infloww</DialogTitle>
+                  </DialogHeader>
+                  <p className="text-sm text-zinc-400">
+                    Upload your Infloww data export. Supported formats: CSV, XLSX, XLS.
+                  </p>
+
+                  {/* Drop zone */}
+                  <div
+                    onDragOver={(e) => { e.preventDefault(); setInflowwDragging(true); }}
+                    onDragLeave={() => setInflowwDragging(false)}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      setInflowwDragging(false);
+                      const file = e.dataTransfer.files[0];
+                      if (file) setInflowwFile(file);
+                    }}
+                    onClick={() => document.getElementById("infloww-file-input")?.click()}
+                    className={`mt-1 flex cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed p-8 transition-colors ${
+                      inflowwDragging
+                        ? "border-pink-400/60 bg-pink-400/5"
+                        : "border-white/20 hover:border-white/40 hover:bg-white/[0.02]"
+                    }`}
+                  >
+                    <input
+                      id="infloww-file-input"
+                      type="file"
+                      accept=".csv,.xlsx,.xls"
+                      className="hidden"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) setInflowwFile(file);
+                      }}
+                    />
+                    {inflowwFile ? (
+                      <>
+                        <p className="text-sm font-medium text-white">{inflowwFile.name}</p>
+                        <p className="text-xs text-zinc-500">{(inflowwFile.size / 1024).toFixed(1)} KB</p>
+                        <p className="text-xs text-zinc-600">Click to change file</p>
+                      </>
+                    ) : (
+                      <>
+                        <p className="text-sm text-zinc-400">Drag &amp; drop your file here</p>
+                        <p className="text-xs text-zinc-600">or click to browse</p>
+                        <p className="mt-1 text-xs text-zinc-600">CSV · XLSX · XLS</p>
+                      </>
+                    )}
+                  </div>
+
+                  {inflowwUploadError && (
+                    <p className="text-sm text-red-400 pb-1">{inflowwUploadError}</p>
+                  )}
+                  <div className="flex justify-end gap-2 pt-1">
+                    <Button
+                      variant="outline"
+                      className="border-white/20 text-zinc-300 hover:bg-white/10 hover:text-white"
+                      onClick={() => setInflowwUploadOpen(false)}
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      disabled={!inflowwFile || inflowwUploading}
+                      className="bg-gradient-to-r from-pink to-pink-muted text-white hover:opacity-90 disabled:opacity-40"
+                      onClick={async () => {
+                        if (!inflowwFile) return;
+                        setInflowwUploading(true);
+                        setInflowwUploadError(null);
+                        try {
+                          const form = new FormData();
+                          form.append("file", inflowwFile);
+                          const res = await fetch("/api/infloww/upload", {
+                            method: "POST",
+                            body: form,
+                          });
+                          const json = await res.json() as { ok?: boolean; error?: string; rowsUpserted?: number; creators?: string[] };
+                          if (!res.ok || !json.ok) {
+                            setInflowwUploadError(json.error ?? "Upload failed");
+                            return;
+                          }
+                          localStorage.setItem("infloww-file-name", inflowwFile.name);
+                          setInflowwFileName(inflowwFile.name);
+                          setInflowwConnected(true);
+                          setInflowwUploadOpen(false);
+                          setInflowwFile(null);
+                          setBannerSuccess(
+                            `Infloww data loaded — ${json.rowsUpserted ?? 0} rows for: ${(json.creators ?? []).join(", ")}`
+                          );
+                          setTimeout(() => setBannerSuccess(null), 8000);
+                        } catch (e) {
+                          setInflowwUploadError(e instanceof Error ? e.message : "Upload failed");
+                        } finally {
+                          setInflowwUploading(false);
+                        }
+                      }}
+                    >
+                      {inflowwUploading ? "Uploading…" : "Upload"}
+                    </Button>
+                  </div>
+                </DialogContent>
+              </Dialog>
             </>
           )}
         </CardContent>

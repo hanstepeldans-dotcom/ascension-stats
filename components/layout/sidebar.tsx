@@ -6,7 +6,6 @@ import {
   LayoutDashboard,
   BarChart3,
   PieChart,
-  GitMerge,
   Users,
   Settings,
 } from "lucide-react";
@@ -17,7 +16,6 @@ const navItems = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/infloww", label: "Infloww", icon: BarChart3 },
   { href: "/fanvue", label: "Fanvue", icon: PieChart },
-  { href: "/combined", label: "Combined", icon: GitMerge },
   { href: "/members", label: "Members", icon: Users },
   { href: "/settings", label: "Settings", icon: Settings },
 ];
