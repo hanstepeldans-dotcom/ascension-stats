@@ -18,6 +18,13 @@ const OFFSET_MINUTES = 120;
 const CENTS_TO_DOLLARS = 1 / 100;
 const PAGE_SIZE = 50;
 
+// Rate-limit back-off delays (ms)
+const DELAY_BETWEEN_PAGES_MS = 600;      // between paginated requests for one creator+chunk
+const DELAY_BETWEEN_CHUNKS_MS = 1200;    // after finishing each 7-day chunk
+const DELAY_BETWEEN_CREATORS_MS = 2000;  // after finishing all chunks for one creator
+
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
 function getEarningsArray(payload: unknown): unknown[] {
   if (Array.isArray(payload)) return payload;
   const p = payload as Record<string, unknown> | null;
@@ -188,6 +195,7 @@ export async function runFanvueSync(
         byDay.set(key, cur);
       }
       cursor = getNextCursor(earnings);
+      if (cursor) await sleep(DELAY_BETWEEN_PAGES_MS);
     } while (cursor);
 
     for (const [dateStr, agg] of byDay) {
@@ -229,6 +237,7 @@ export async function runFanvueSync(
     }
 
     creatorsProcessed += 1;
+    if (creatorsProcessed < creatorUuids.length) await sleep(DELAY_BETWEEN_CREATORS_MS);
   }
 
   const daysSynced = Math.ceil((range.endDateUtc.getTime() - range.startDateUtc.getTime()) / (24 * 60 * 60 * 1000)) + 1;
@@ -350,8 +359,10 @@ export async function runFanvueRebuild(
           byDay.set(key, cur);
         }
         cursor = getNextCursor(earnings);
+        if (cursor) await sleep(DELAY_BETWEEN_PAGES_MS);
       } while (cursor);
       chunksProcessed += 1;
+      await sleep(DELAY_BETWEEN_CHUNKS_MS);
     }
 
     for (const [dateStr, agg] of byDay) {
@@ -387,6 +398,7 @@ export async function runFanvueRebuild(
     }
 
     creatorsProcessed += 1;
+    if (creatorsProcessed < creatorUuids.length) await sleep(DELAY_BETWEEN_CREATORS_MS);
   }
 
   return {
