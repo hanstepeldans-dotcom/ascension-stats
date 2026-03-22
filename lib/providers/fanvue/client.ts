@@ -84,6 +84,7 @@ export interface FanvueApiErrorDetails {
   method: string;
   queryParams: Record<string, string>;
   responsePreview: string;
+  retryCount?: number;
 }
 
 export class FanvueApiError extends Error {
@@ -92,21 +93,35 @@ export class FanvueApiError extends Error {
   readonly method: string;
   readonly queryParams: Record<string, string>;
   readonly responsePreview: string;
+  readonly retryCount: number;
 
   constructor(details: FanvueApiErrorDetails) {
-    super(`Fanvue API error ${details.status}`);
+    super(`Fanvue API error ${details.status} (after ${details.retryCount ?? 0} retr${(details.retryCount ?? 0) === 1 ? "y" : "ies"})`);
     this.name = "FanvueApiError";
     this.status = details.status;
     this.endpoint = details.endpoint;
     this.method = details.method;
     this.queryParams = details.queryParams;
     this.responsePreview = details.responsePreview;
+    this.retryCount = details.retryCount ?? 0;
   }
 }
 
 export function isInsufficientScopesError(body: string): boolean {
   return /insufficient\s+scopes/i.test(body);
 }
+
+/**
+ * HTTP status codes that warrant an automatic retry.
+ * 502 Bad Gateway, 503 Service Unavailable, 504 Gateway Timeout,
+ * 429 Too Many Requests.
+ */
+const RETRYABLE_STATUSES = new Set([429, 502, 503, 504]);
+
+/** Delays (ms) for retry attempts 1, 2, 3. */
+const RETRY_DELAYS_MS = [2_000, 5_000, 10_000];
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 export async function fanvueFetch<T = unknown>(
   endpoint: string,
@@ -115,33 +130,84 @@ export async function fanvueFetch<T = unknown>(
   const base = getBaseUrl();
   const path = endpoint.startsWith("/") ? endpoint : `/${endpoint}`;
   const url = `${base}${path}`;
+  const headers = getHeaders(accessToken);
 
-  const res = await fetch(url, {
-    method: "GET",
-    headers: getHeaders(accessToken),
-  });
+  let lastStatus = 0;
+  let lastPreview = "";
+  let networkError: unknown = null;
 
-  if (!res.ok) {
-    const raw = await res.text();
-    if (res.status === 403 && isInsufficientScopesError(raw)) {
-      throw new Error(INSUFFICIENT_SCOPES_MESSAGE);
-    }
-    let responsePreview: string;
+  for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
     try {
-      const json = JSON.parse(raw) as { error?: string; error_description?: string; message?: string };
-      const part = json.error_description ?? json.error ?? json.message ?? raw;
-      responsePreview = sanitizePreview(typeof part === "string" ? part : JSON.stringify(part));
-    } catch {
-      responsePreview = sanitizePreview(raw);
+      const res = await fetch(url, { method: "GET", headers });
+
+      // Transient server error — retry if attempts remain
+      if (RETRYABLE_STATUSES.has(res.status) && attempt < RETRY_DELAYS_MS.length) {
+        lastStatus = res.status;
+        // Drain body to release connection
+        try { await res.text(); } catch { /* ignore */ }
+        await sleep(RETRY_DELAYS_MS[attempt]!);
+        continue;
+      }
+
+      if (!res.ok) {
+        const raw = await res.text();
+        if (res.status === 403 && isInsufficientScopesError(raw)) {
+          throw new Error(INSUFFICIENT_SCOPES_MESSAGE);
+        }
+        let responsePreview: string;
+        try {
+          const json = JSON.parse(raw) as { error?: string; error_description?: string; message?: string };
+          const part = json.error_description ?? json.error ?? json.message ?? raw;
+          responsePreview = sanitizePreview(typeof part === "string" ? part : JSON.stringify(part));
+        } catch {
+          responsePreview = sanitizePreview(raw);
+        }
+        throw new FanvueApiError({
+          status: res.status,
+          endpoint,
+          method: "GET",
+          queryParams: getQueryParamsFromEndpoint(endpoint),
+          responsePreview,
+          retryCount: attempt,
+        });
+      }
+
+      return res.json() as Promise<T>;
+
+    } catch (err) {
+      // Re-throw non-retryable errors immediately (FanvueApiError, insufficient scopes, etc.)
+      if (err instanceof FanvueApiError || (err instanceof Error && err.message === INSUFFICIENT_SCOPES_MESSAGE)) {
+        throw err;
+      }
+      // Network-level error (ECONNRESET, ETIMEDOUT, fetch failed, etc.) — retry if attempts remain
+      networkError = err;
+      lastStatus = 0;
+      if (attempt < RETRY_DELAYS_MS.length) {
+        await sleep(RETRY_DELAYS_MS[attempt]!);
+        continue;
+      }
     }
+  }
+
+  // All retries exhausted
+  if (networkError) {
+    const msg = networkError instanceof Error ? networkError.message : String(networkError);
     throw new FanvueApiError({
-      status: res.status,
+      status: lastStatus,
       endpoint,
       method: "GET",
       queryParams: getQueryParamsFromEndpoint(endpoint),
-      responsePreview,
+      responsePreview: `Network error after ${RETRY_DELAYS_MS.length} retries: ${sanitizePreview(msg)}`,
+      retryCount: RETRY_DELAYS_MS.length,
     });
   }
 
-  return res.json() as Promise<T>;
+  throw new FanvueApiError({
+    status: lastStatus,
+    endpoint,
+    method: "GET",
+    queryParams: getQueryParamsFromEndpoint(endpoint),
+    responsePreview: lastPreview || `HTTP ${lastStatus} after ${RETRY_DELAYS_MS.length} retries`,
+    retryCount: RETRY_DELAYS_MS.length,
+  });
 }
