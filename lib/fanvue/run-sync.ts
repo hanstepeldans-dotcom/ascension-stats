@@ -16,7 +16,8 @@ import {
 
 const OFFSET_MINUTES = 120;
 const CENTS_TO_DOLLARS = 1 / 100;
-const PAGE_SIZE = 50;
+const PAGE_SIZE = 50;          // creators list
+const EARNINGS_PAGE_SIZE = 20; // earnings pagination (reduced to avoid 502s)
 
 // Rate-limit back-off delays (ms)
 const DELAY_BETWEEN_PAGES_MS = 600;      // between paginated requests for one creator+chunk
@@ -168,7 +169,7 @@ export async function runFanvueSync(
       const q = new URLSearchParams({
         startDate: range.startUtcIso,
         endDate: range.endUtcIso,
-        size: String(PAGE_SIZE),
+        size: String(EARNINGS_PAGE_SIZE),
         ...(cursor && { cursor }),
       });
       const earnings = await fanvueFetch<unknown>(
@@ -337,7 +338,7 @@ export async function runFanvueRebuild(
         const q = new URLSearchParams({
           startDate: chunk.startUtcIso,
           endDate: chunk.endUtcIso,
-          size: String(PAGE_SIZE),
+          size: String(EARNINGS_PAGE_SIZE),
           ...(cursor && { cursor }),
         });
         const earnings = await fanvueFetch<unknown>(
