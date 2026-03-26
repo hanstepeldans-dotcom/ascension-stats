@@ -1,14 +1,28 @@
 /**
- * Fanvue sync: fetch creators and earnings from API, bucket by UTC+2 local day, write to DB.
- * All date bucketing uses getLocalDateKey(ts, 120) — never UTC date string slicing.
+ * Fanvue sync — fetch creators and earnings from the API, bucket by UTC+2 local
+ * day, write to DB.
  *
- * Creator concurrency: up to CREATOR_CONCURRENCY creators are fetched in parallel.
- * Pagination within a creator is always sequential.
- * DB writes are always sequential (after each batch resolves).
+ * Architecture
+ * ────────────
+ * All creators are started concurrently immediately.  Every Fanvue HTTP request
+ * passes through a single AdaptiveLimiter that caps total in-flight requests and
+ * automatically backs off when 429/502/503/504 responses are detected.
+ *
+ * Concurrency invariants:
+ *   • At most LIMITER_MAX in-flight Fanvue requests at any time (global, cross-creator)
+ *   • Pagination within a creator is sequential (page N+1 starts after page N)
+ *   • Chunks within a creator are sequential (chunk N+1 starts after chunk N)
+ *   • fanvueCreatorDailyEarnings rows are written chunk-by-chunk, while other
+ *     creators are still running (different rows → no DB conflict)
+ *   • agencyDailyRevenue is written once at the very end, after all creators finish
+ *
+ * All date bucketing uses getLocalDateKey(ts, 120) — never UTC date string slicing.
  */
 
 import { prisma } from "@/lib/db";
 import { fanvueFetch } from "@/lib/providers/fanvue/client";
+import { AdaptiveLimiter } from "@/lib/fanvue/adaptive-limiter";
+import type { LimiterDiagnostics } from "@/lib/fanvue/adaptive-limiter";
 import type { FanvuePeriod } from "@/lib/time/fanvue-range";
 import {
   getFanvuePeriodRange,
@@ -18,34 +32,41 @@ import {
   splitRangeIntoChunks,
 } from "@/lib/time/fanvue-range";
 
-const OFFSET_MINUTES = 120;
-const CENTS_TO_DOLLARS = 1 / 100;
-const PAGE_SIZE = 50;          // creators list
-const EARNINGS_PAGE_SIZE = 20; // earnings pagination (smaller = lighter per request)
+// ─── Constants ────────────────────────────────────────────────────────────────
 
-// Rate-limit back-off delays (ms) — reduced from previous values to speed up sync
-const DELAY_BETWEEN_PAGES_MS   = 300;   // was 600 — between paginated pages within one creator+chunk
-const DELAY_BETWEEN_CHUNKS_MS  = 600;   // was 1200 — after each 7-day chunk (rebuild only)
-const DELAY_BETWEEN_BATCHES_MS = 1500;  // was 2000 per creator — between groups of parallel creators
+const OFFSET_MINUTES    = 120;
+const CENTS_TO_DOLLARS  = 1 / 100;
+const PAGE_SIZE         = 50;   // creators list
+const EARNINGS_PAGE_SIZE = 20;  // earnings pagination (smaller = lighter per request)
 
-// Max number of creators fetched simultaneously from the Fanvue API
-const CREATOR_CONCURRENCY = 2;
+// Small courtesy pauses — the limiter is the primary rate-control mechanism
+const DELAY_BETWEEN_PAGES_MS  = 100;  // between cursor pages within one creator+chunk
+const DELAY_BETWEEN_CHUNKS_MS = 200;  // between 7-day chunks within one creator (rebuild only)
 
-const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+// Adaptive limiter config
+const LIMITER_INITIAL = 4;  // starting in-flight Fanvue request slots
+const LIMITER_MAX     = 8;  // ceiling
+const LIMITER_MIN     = 1;  // floor
 
-// ─── Shared types ────────────────────────────────────────────────────────────
+const SYNC_DAYS  = 33;
+const CHUNK_DAYS = 7;
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+// ─── Internal types ───────────────────────────────────────────────────────────
 
 type DayAgg = { total: number; messages: number; tips: number; subscriptions: number };
 
-interface CreatorFetchResult {
-  byDay: Map<string, DayAgg>;
-  /** Per-date revenue in cents, used to roll up agencyDailyRevenue. */
+interface CreatorTaskResult {
+  fanvueUuid: string;
+  /** Per-date revenue in cents across all chunks/pages — used to roll up agencyDailyRevenue. */
   revenueCentsByDate: Map<string, number>;
   pagesFetched: number;
   chunksProcessed: number;
+  dailyRowsUpserted: number;
 }
 
-// ─── Parsing helpers ─────────────────────────────────────────────────────────
+// ─── Parsing helpers ──────────────────────────────────────────────────────────
 
 function getEarningsArray(payload: unknown): unknown[] {
   if (Array.isArray(payload)) return payload;
@@ -63,70 +84,57 @@ function getNextCursor(payload: unknown): string | null {
   return typeof c === "string" && c ? c : null;
 }
 
-function parseCreatorsList(payload: unknown): { fanvueUuid: string; handle?: string; displayName?: string; avatarUrl?: string }[] {
-  const arr = getEarningsArray(payload);
+function parseCreatorsList(
+  payload: unknown
+): { fanvueUuid: string; handle?: string; displayName?: string; avatarUrl?: string }[] {
   const out: { fanvueUuid: string; handle?: string; displayName?: string; avatarUrl?: string }[] = [];
-  for (const item of arr) {
+  for (const item of getEarningsArray(payload)) {
     if (!item || typeof item !== "object") continue;
     const obj = item as Record<string, unknown>;
     const fanvueUuid =
-      typeof obj.userUuid === "string"
-        ? obj.userUuid
-        : typeof obj.uuid === "string"
-          ? obj.uuid
-          : typeof obj.id === "string"
-            ? obj.id
-            : "";
+      typeof obj.userUuid === "string" ? obj.userUuid :
+      typeof obj.uuid    === "string" ? obj.uuid    :
+      typeof obj.id      === "string" ? obj.id      : "";
     if (!fanvueUuid) continue;
     out.push({
       fanvueUuid,
-      handle: typeof obj.handle === "string" ? obj.handle : undefined,
-      displayName:
-        typeof obj.displayName === "string"
-          ? obj.displayName
-          : typeof obj.name === "string"
-            ? obj.name
-            : undefined,
-      avatarUrl:
-        typeof obj.avatarUrl === "string"
-          ? obj.avatarUrl
-          : typeof obj.avatar === "string"
-            ? obj.avatar
-            : undefined,
+      handle:      typeof obj.handle      === "string" ? obj.handle      : undefined,
+      displayName: typeof obj.displayName === "string" ? obj.displayName :
+                   typeof obj.name        === "string" ? obj.name        : undefined,
+      avatarUrl:   typeof obj.avatarUrl   === "string" ? obj.avatarUrl   :
+                   typeof obj.avatar      === "string" ? obj.avatar      : undefined,
     });
   }
   return out;
 }
 
-function parseEarningsItems(payload: unknown): { date: Date; amountCents: number; source?: string }[] {
-  const arr = getEarningsArray(payload);
+function parseEarningsItems(
+  payload: unknown
+): { date: Date; amountCents: number; source?: string }[] {
   const out: { date: Date; amountCents: number; source?: string }[] = [];
-  for (const item of arr) {
+  for (const item of getEarningsArray(payload)) {
     if (!item || typeof item !== "object") continue;
     const obj = item as Record<string, unknown>;
     const dateRaw = obj.date ?? obj.createdAt ?? obj.periodStart ?? obj.paidAt;
     const amountCents =
-      typeof obj.net === "number"
-        ? obj.net
-        : typeof obj.netAmount === "number"
-          ? obj.netAmount
-          : typeof obj.amount === "number"
-            ? obj.amount
-            : Number(obj.net) || Number(obj.amount) || 0;
+      typeof obj.net       === "number" ? obj.net       :
+      typeof obj.netAmount === "number" ? obj.netAmount :
+      typeof obj.amount    === "number" ? obj.amount    :
+      Number(obj.net) || Number(obj.amount) || 0;
     if (!dateRaw || Number.isNaN(amountCents)) continue;
     const date = new Date(dateRaw as string);
     if (Number.isNaN(date.getTime())) continue;
-    const source = typeof obj.source === "string" ? obj.source : undefined;
-    out.push({ date, amountCents, source });
+    out.push({ date, amountCents, source: typeof obj.source === "string" ? obj.source : undefined });
   }
   return out;
 }
 
+/** Merge parsed earnings items into running accumulators. */
 function accumulateItems(
   items: { date: Date; amountCents: number; source?: string }[],
   byDay: Map<string, DayAgg>,
   revenueCentsByDate: Map<string, number>
-) {
+): void {
   for (const { date, amountCents, source } of items) {
     const key = getLocalDateKey(date, OFFSET_MINUTES);
     revenueCentsByDate.set(key, (revenueCentsByDate.get(key) ?? 0) + amountCents);
@@ -141,82 +149,22 @@ function accumulateItems(
   }
 }
 
-// ─── Per-creator fetch helpers (run in parallel per batch) ───────────────────
-
-/** Fetch earnings for one creator over a single date range (used by runFanvueSync). */
-async function fetchCreatorEarningsForRange(
-  creatorUuid: string,
-  accessToken: string,
-  startUtcIso: string,
-  endUtcIso: string
-): Promise<CreatorFetchResult> {
-  const byDay = new Map<string, DayAgg>();
-  const revenueCentsByDate = new Map<string, number>();
-  let pagesFetched = 0;
-  let cursor: string | null = null;
-
-  do {
-    const q = new URLSearchParams({
-      startDate: startUtcIso,
-      endDate: endUtcIso,
-      size: String(EARNINGS_PAGE_SIZE),
-      ...(cursor && { cursor }),
-    });
-    const earnings = await fanvueFetch<unknown>(
-      `/creators/${encodeURIComponent(creatorUuid)}/insights/earnings?${q.toString()}`,
-      accessToken
-    );
-    pagesFetched += 1;
-    accumulateItems(parseEarningsItems(earnings), byDay, revenueCentsByDate);
-    cursor = getNextCursor(earnings);
-    if (cursor) await sleep(DELAY_BETWEEN_PAGES_MS);
-  } while (cursor);
-
-  return { byDay, revenueCentsByDate, pagesFetched, chunksProcessed: 0 };
+function round2(n: number): number {
+  return Math.round(n * 100) / 100;
 }
 
-/** Fetch earnings for one creator over multiple 7-day chunks (used by runFanvueRebuild). */
-async function fetchCreatorEarningsChunked(
-  creatorUuid: string,
-  accessToken: string,
-  chunks: { startUtcIso: string; endUtcIso: string }[]
-): Promise<CreatorFetchResult> {
-  const byDay = new Map<string, DayAgg>();
-  const revenueCentsByDate = new Map<string, number>();
-  let pagesFetched = 0;
-  let chunksProcessed = 0;
-
-  for (const chunk of chunks) {
-    let cursor: string | null = null;
-    do {
-      const q = new URLSearchParams({
-        startDate: chunk.startUtcIso,
-        endDate: chunk.endUtcIso,
-        size: String(EARNINGS_PAGE_SIZE),
-        ...(cursor && { cursor }),
-      });
-      const earnings = await fanvueFetch<unknown>(
-        `/creators/${encodeURIComponent(creatorUuid)}/insights/earnings?${q.toString()}`,
-        accessToken
-      );
-      pagesFetched += 1;
-      accumulateItems(parseEarningsItems(earnings), byDay, revenueCentsByDate);
-      cursor = getNextCursor(earnings);
-      if (cursor) await sleep(DELAY_BETWEEN_PAGES_MS);
-    } while (cursor);
-    chunksProcessed += 1;
-    await sleep(DELAY_BETWEEN_CHUNKS_MS);
-  }
-
-  return { byDay, revenueCentsByDate, pagesFetched, chunksProcessed };
+/** Build the onThrottle option that wires fanvueFetch back to the limiter. */
+function throttleOpt(limiter: AdaptiveLimiter) {
+  return { onThrottle: () => limiter.onThrottleSignal() };
 }
 
-// ─── Public sync functions ───────────────────────────────────────────────────
+// ─── Public result types ──────────────────────────────────────────────────────
 
 export interface RunFanvueSyncResult {
   ok: boolean;
   creatorsUpserted: number;
   creatorsProcessed: number;
+  creatorsFailedToFetch: number;
   chunksProcessed: number;
   pagesFetched: number;
   dailyRowsUpserted: number;
@@ -225,125 +173,8 @@ export interface RunFanvueSyncResult {
   endDate: string;
   startLocal: string;
   endLocal: string;
+  limiterDiagnostics: LimiterDiagnostics;
 }
-
-/**
- * Run Fanvue sync for the given period. Uses UTC+2 for all date bucketing.
- * Fetches up to CREATOR_CONCURRENCY creators in parallel; DB writes are sequential.
- */
-export async function runFanvueSync(
-  userId: string,
-  accessToken: string,
-  period: FanvuePeriod
-): Promise<RunFanvueSyncResult> {
-  const range = getFanvuePeriodRange(period, OFFSET_MINUTES);
-  let pagesFetched = 0;
-
-  const creatorsPayload = await fanvueFetch<unknown>(
-    `/creators?page=1&size=${PAGE_SIZE}`,
-    accessToken
-  );
-  pagesFetched += 1;
-  const parsedCreators = parseCreatorsList(creatorsPayload);
-  const creatorUuids = parsedCreators.map((c) => c.fanvueUuid);
-
-  const fanvueUuidToCreatorId = new Map<string, string>();
-  for (const c of parsedCreators) {
-    const creator = await prisma.fanvueCreator.upsert({
-      where: { userId_fanvueUuid: { userId, fanvueUuid: c.fanvueUuid } },
-      create: { userId, fanvueUuid: c.fanvueUuid, handle: c.handle, displayName: c.displayName, avatarUrl: c.avatarUrl },
-      update: { handle: c.handle, displayName: c.displayName, avatarUrl: c.avatarUrl },
-    });
-    fanvueUuidToCreatorId.set(c.fanvueUuid, creator.id);
-  }
-
-  // Accumulates cross-creator daily revenue for agencyDailyRevenue
-  const globalRevenueCents = new Map<string, number>();
-  let dailyRowsUpserted = 0;
-  let creatorsProcessed = 0;
-
-  for (let i = 0; i < creatorUuids.length; i += CREATOR_CONCURRENCY) {
-    const batch = creatorUuids.slice(i, i + CREATOR_CONCURRENCY);
-
-    // Fetch all creators in this batch in parallel
-    const batchResults = await Promise.all(
-      batch.map((uuid) =>
-        fetchCreatorEarningsForRange(uuid, accessToken, range.startUtcIso, range.endUtcIso)
-      )
-    );
-
-    // Write results sequentially (no DB race conditions)
-    for (let j = 0; j < batch.length; j++) {
-      const creatorUuid = batch[j]!;
-      const creatorId = fanvueUuidToCreatorId.get(creatorUuid);
-      if (!creatorId) continue;
-
-      const result = batchResults[j]!;
-      pagesFetched += result.pagesFetched;
-
-      for (const [dateStr, cents] of result.revenueCentsByDate) {
-        globalRevenueCents.set(dateStr, (globalRevenueCents.get(dateStr) ?? 0) + cents);
-      }
-
-      for (const [dateStr, agg] of result.byDay) {
-        const date = toDateOnly(dateStr);
-        await prisma.fanvueCreatorDailyEarnings.upsert({
-          where: { creatorId_date: { creatorId, date } },
-          create: {
-            creatorId, date,
-            total: Math.round(agg.total * 100) / 100,
-            messages: Math.round(agg.messages * 100) / 100,
-            tips: Math.round(agg.tips * 100) / 100,
-            subscriptions: Math.round(agg.subscriptions * 100) / 100,
-          },
-          update: {
-            total: Math.round(agg.total * 100) / 100,
-            messages: Math.round(agg.messages * 100) / 100,
-            tips: Math.round(agg.tips * 100) / 100,
-            subscriptions: Math.round(agg.subscriptions * 100) / 100,
-          },
-        });
-        dailyRowsUpserted += 1;
-      }
-      creatorsProcessed += 1;
-    }
-
-    if (i + CREATOR_CONCURRENCY < creatorUuids.length) {
-      await sleep(DELAY_BETWEEN_BATCHES_MS);
-    }
-  }
-
-  for (const [dateStr, revenueCents] of globalRevenueCents) {
-    const date = toDateOnly(dateStr);
-    const revenue = revenueCents * CENTS_TO_DOLLARS;
-    await prisma.agencyDailyRevenue.upsert({
-      where: { userId_date: { userId, date } },
-      create: { userId, date, fanvue: revenue, infloww: 0, total: revenue },
-      update: { fanvue: revenue, infloww: 0, total: revenue },
-    });
-  }
-
-  const daysSynced =
-    Math.ceil((range.endDateUtc.getTime() - range.startDateUtc.getTime()) / (24 * 60 * 60 * 1000)) + 1;
-
-  return {
-    ok: true,
-    creatorsUpserted: parsedCreators.length,
-    creatorsProcessed,
-    chunksProcessed: 1,
-    pagesFetched,
-    dailyRowsUpserted,
-    daysSynced,
-    startDate: range.startUtcIso,
-    endDate: range.endUtcIso,
-    startLocal: range.startLocal,
-    endLocal: range.endLocal,
-  };
-}
-
-/** Full 33-day sync for rebuild: clear Fanvue data in range then re-import. */
-const SYNC_DAYS = 33;
-const CHUNK_DAYS = 7;
 
 export interface RunFanvueRebuildResult extends RunFanvueSyncResult {
   rebuilt: true;
@@ -351,36 +182,27 @@ export interface RunFanvueRebuildResult extends RunFanvueSyncResult {
   deletedAgencyRows: number;
 }
 
+// ─── runFanvueSync ────────────────────────────────────────────────────────────
+
 /**
- * Rebuild: delete FanvueCreatorDailyEarnings and AgencyDailyRevenue for the user in the 33-day range,
- * then re-import all creators over all 33 days in 7-day chunks.
- * Fetches up to CREATOR_CONCURRENCY creators in parallel; DB writes are sequential.
+ * Sync Fanvue for the given period.  All creators start concurrently; every
+ * HTTP request is gated through the global adaptive limiter.
  */
-export async function runFanvueRebuild(
+export async function runFanvueSync(
   userId: string,
-  accessToken: string
-): Promise<RunFanvueRebuildResult> {
-  const range = getFanvueLastNDaysRange(SYNC_DAYS, OFFSET_MINUTES);
+  accessToken: string,
+  period: FanvuePeriod
+): Promise<RunFanvueSyncResult> {
+  const range = getFanvuePeriodRange(period, OFFSET_MINUTES);
+  const limiter = new AdaptiveLimiter({ initial: LIMITER_INITIAL, max: LIMITER_MAX, min: LIMITER_MIN });
 
-  const r1 = await prisma.fanvueCreatorDailyEarnings.deleteMany({
-    where: { creator: { userId }, date: { gte: range.startDateUtc, lte: range.endDateUtc } },
-  });
-  const r2 = await prisma.agencyDailyRevenue.deleteMany({
-    where: { userId, date: { gte: range.startDateUtc, lte: range.endDateUtc } },
-  });
-
-  const chunks = splitRangeIntoChunks(range.startDateUtc, range.endDateUtc, CHUNK_DAYS);
-  let pagesFetched = 0;
-  let chunksProcessed = 0;
-
-  const creatorsPayload = await fanvueFetch<unknown>(
-    `/creators?page=1&size=${PAGE_SIZE}`,
-    accessToken
+  // Fetch creators list (counts toward limiter)
+  const creatorsPayload = await limiter.run(() =>
+    fanvueFetch<unknown>(`/creators?page=1&size=${PAGE_SIZE}`, accessToken, throttleOpt(limiter))
   );
-  pagesFetched += 1;
   const parsedCreators = parseCreatorsList(creatorsPayload);
-  const creatorUuids = parsedCreators.map((c) => c.fanvueUuid);
 
+  // Upsert creator records sequentially (DB only, not API)
   const fanvueUuidToCreatorId = new Map<string, string>();
   for (const c of parsedCreators) {
     const creator = await prisma.fanvueCreator.upsert({
@@ -391,57 +213,75 @@ export async function runFanvueRebuild(
     fanvueUuidToCreatorId.set(c.fanvueUuid, creator.id);
   }
 
-  const globalRevenueCents = new Map<string, number>();
-  let dailyRowsUpserted = 0;
-  let creatorsProcessed = 0;
+  // ── Launch all creators concurrently ──────────────────────────────────────
+  const creatorTasks = parsedCreators.map(async (c): Promise<CreatorTaskResult> => {
+    const creatorId = fanvueUuidToCreatorId.get(c.fanvueUuid);
+    if (!creatorId) return { fanvueUuid: c.fanvueUuid, revenueCentsByDate: new Map(), pagesFetched: 0, chunksProcessed: 0, dailyRowsUpserted: 0 };
 
-  for (let i = 0; i < creatorUuids.length; i += CREATOR_CONCURRENCY) {
-    const batch = creatorUuids.slice(i, i + CREATOR_CONCURRENCY);
+    const byDay = new Map<string, DayAgg>();
+    const revenueCentsByDate = new Map<string, number>();
+    let pagesFetched = 0;
+    let cursor: string | null = null;
 
-    // Fetch all creators in this batch in parallel (each processes all chunks sequentially)
-    const batchResults = await Promise.all(
-      batch.map((uuid) => fetchCreatorEarningsChunked(uuid, accessToken, chunks))
-    );
+    // Paginate the full range (no chunks for regular sync)
+    do {
+      const q = new URLSearchParams({
+        startDate: range.startUtcIso,
+        endDate:   range.endUtcIso,
+        size:      String(EARNINGS_PAGE_SIZE),
+        ...(cursor && { cursor }),
+      });
+      const earnings = await limiter.run(() =>
+        fanvueFetch<unknown>(
+          `/creators/${encodeURIComponent(c.fanvueUuid)}/insights/earnings?${q}`,
+          accessToken,
+          throttleOpt(limiter)
+        )
+      );
+      pagesFetched++;
+      accumulateItems(parseEarningsItems(earnings), byDay, revenueCentsByDate);
+      cursor = getNextCursor(earnings);
+      if (cursor) await sleep(DELAY_BETWEEN_PAGES_MS);
+    } while (cursor);
 
-    // Write results sequentially
-    for (let j = 0; j < batch.length; j++) {
-      const creatorUuid = batch[j]!;
-      const creatorId = fanvueUuidToCreatorId.get(creatorUuid);
-      if (!creatorId) continue;
-
-      const result = batchResults[j]!;
-      pagesFetched += result.pagesFetched;
-      chunksProcessed += result.chunksProcessed;
-
-      for (const [dateStr, cents] of result.revenueCentsByDate) {
-        globalRevenueCents.set(dateStr, (globalRevenueCents.get(dateStr) ?? 0) + cents);
-      }
-
-      for (const [dateStr, agg] of result.byDay) {
-        const date = toDateOnly(dateStr);
-        await prisma.fanvueCreatorDailyEarnings.upsert({
-          where: { creatorId_date: { creatorId, date } },
-          create: {
-            creatorId, date,
-            total: Math.round(agg.total * 100) / 100,
-            messages: Math.round(agg.messages * 100) / 100,
-            tips: Math.round(agg.tips * 100) / 100,
-            subscriptions: Math.round(agg.subscriptions * 100) / 100,
-          },
-          update: {
-            total: Math.round(agg.total * 100) / 100,
-            messages: Math.round(agg.messages * 100) / 100,
-            tips: Math.round(agg.tips * 100) / 100,
-            subscriptions: Math.round(agg.subscriptions * 100) / 100,
-          },
-        });
-        dailyRowsUpserted += 1;
-      }
-      creatorsProcessed += 1;
+    // Write this creator's rows to DB (runs concurrently with other creators; different rows → no conflict)
+    let dailyRowsUpserted = 0;
+    for (const [dateStr, agg] of byDay) {
+      const date = toDateOnly(dateStr);
+      await prisma.fanvueCreatorDailyEarnings.upsert({
+        where: { creatorId_date: { creatorId, date } },
+        create: { creatorId, date, total: round2(agg.total), messages: round2(agg.messages), tips: round2(agg.tips), subscriptions: round2(agg.subscriptions) },
+        update: { total: round2(agg.total), messages: round2(agg.messages), tips: round2(agg.tips), subscriptions: round2(agg.subscriptions) },
+      });
+      dailyRowsUpserted++;
     }
 
-    if (i + CREATOR_CONCURRENCY < creatorUuids.length) {
-      await sleep(DELAY_BETWEEN_BATCHES_MS);
+    return { fanvueUuid: c.fanvueUuid, revenueCentsByDate, pagesFetched, chunksProcessed: 0, dailyRowsUpserted };
+  });
+
+  const settled = await Promise.allSettled(creatorTasks);
+
+  // ── Merge results & write agencyDailyRevenue ──────────────────────────────
+  const globalRevenueCents = new Map<string, number>();
+  let totalPagesFetched = 1; // creators list request
+  let totalDailyRowsUpserted = 0;
+  let creatorsProcessed = 0;
+  let creatorsFailedToFetch = 0;
+
+  for (const outcome of settled) {
+    if (outcome.status === "fulfilled") {
+      const r = outcome.value;
+      totalPagesFetched += r.pagesFetched;
+      totalDailyRowsUpserted += r.dailyRowsUpserted;
+      for (const [dateStr, cents] of r.revenueCentsByDate) {
+        globalRevenueCents.set(dateStr, (globalRevenueCents.get(dateStr) ?? 0) + cents);
+      }
+      creatorsProcessed++;
+    } else {
+      creatorsFailedToFetch++;
+      if (process.env.NODE_ENV !== "production") {
+        console.error("[fanvue-sync] creator task failed:", outcome.reason);
+      }
     }
   }
 
@@ -454,6 +294,181 @@ export async function runFanvueRebuild(
       update: { fanvue: revenue, infloww: 0, total: revenue },
     });
   }
+
+  const diag = limiter.diagnostics;
+  console.log("[fanvue-sync] completed", {
+    totalCreators: parsedCreators.length,
+    creatorsProcessed,
+    creatorsFailedToFetch,
+    totalPagesFetched,
+    ...diag,
+  });
+
+  const daysSynced = Math.ceil(
+    (range.endDateUtc.getTime() - range.startDateUtc.getTime()) / (24 * 60 * 60 * 1000)
+  ) + 1;
+
+  return {
+    ok: true,
+    creatorsUpserted: parsedCreators.length,
+    creatorsProcessed,
+    creatorsFailedToFetch,
+    chunksProcessed: 1,
+    pagesFetched: totalPagesFetched,
+    dailyRowsUpserted: totalDailyRowsUpserted,
+    daysSynced,
+    startDate: range.startUtcIso,
+    endDate: range.endUtcIso,
+    startLocal: range.startLocal,
+    endLocal: range.endLocal,
+    limiterDiagnostics: diag,
+  };
+}
+
+// ─── runFanvueRebuild ─────────────────────────────────────────────────────────
+
+/**
+ * Full 33-day rebuild: delete existing Fanvue data in the range, then re-import
+ * everything.  All creators run concurrently; each creator saves chunk-by-chunk
+ * so progress survives a mid-sync failure.
+ */
+export async function runFanvueRebuild(
+  userId: string,
+  accessToken: string
+): Promise<RunFanvueRebuildResult> {
+  const range  = getFanvueLastNDaysRange(SYNC_DAYS, OFFSET_MINUTES);
+  const chunks = splitRangeIntoChunks(range.startDateUtc, range.endDateUtc, CHUNK_DAYS);
+  const limiter = new AdaptiveLimiter({ initial: LIMITER_INITIAL, max: LIMITER_MAX, min: LIMITER_MIN });
+
+  // Clear existing data for the window
+  const r1 = await prisma.fanvueCreatorDailyEarnings.deleteMany({
+    where: { creator: { userId }, date: { gte: range.startDateUtc, lte: range.endDateUtc } },
+  });
+  const r2 = await prisma.agencyDailyRevenue.deleteMany({
+    where: { userId, date: { gte: range.startDateUtc, lte: range.endDateUtc } },
+  });
+
+  // Fetch creators list
+  const creatorsPayload = await limiter.run(() =>
+    fanvueFetch<unknown>(`/creators?page=1&size=${PAGE_SIZE}`, accessToken, throttleOpt(limiter))
+  );
+  const parsedCreators = parseCreatorsList(creatorsPayload);
+
+  const fanvueUuidToCreatorId = new Map<string, string>();
+  for (const c of parsedCreators) {
+    const creator = await prisma.fanvueCreator.upsert({
+      where: { userId_fanvueUuid: { userId, fanvueUuid: c.fanvueUuid } },
+      create: { userId, fanvueUuid: c.fanvueUuid, handle: c.handle, displayName: c.displayName, avatarUrl: c.avatarUrl },
+      update: { handle: c.handle, displayName: c.displayName, avatarUrl: c.avatarUrl },
+    });
+    fanvueUuidToCreatorId.set(c.fanvueUuid, creator.id);
+  }
+
+  // ── Launch all creators concurrently ──────────────────────────────────────
+  const creatorTasks = parsedCreators.map(async (c): Promise<CreatorTaskResult> => {
+    const creatorId = fanvueUuidToCreatorId.get(c.fanvueUuid);
+    if (!creatorId) return { fanvueUuid: c.fanvueUuid, revenueCentsByDate: new Map(), pagesFetched: 0, chunksProcessed: 0, dailyRowsUpserted: 0 };
+
+    const revenueCentsByDate = new Map<string, number>();
+    let pagesFetched = 0;
+    let chunksProcessed = 0;
+    let dailyRowsUpserted = 0;
+
+    for (const chunk of chunks) {
+      // Accumulate this chunk's data into a temporary map
+      const chunkByDay = new Map<string, DayAgg>();
+      let cursor: string | null = null;
+
+      do {
+        const q = new URLSearchParams({
+          startDate: chunk.startUtcIso,
+          endDate:   chunk.endUtcIso,
+          size:      String(EARNINGS_PAGE_SIZE),
+          ...(cursor && { cursor }),
+        });
+        const earnings = await limiter.run(() =>
+          fanvueFetch<unknown>(
+            `/creators/${encodeURIComponent(c.fanvueUuid)}/insights/earnings?${q}`,
+            accessToken,
+            throttleOpt(limiter)
+          )
+        );
+        pagesFetched++;
+        accumulateItems(parseEarningsItems(earnings), chunkByDay, revenueCentsByDate);
+        cursor = getNextCursor(earnings);
+        if (cursor) await sleep(DELAY_BETWEEN_PAGES_MS);
+      } while (cursor);
+
+      // ── Chunk-by-chunk save: write immediately while other creators still run ──
+      for (const [dateStr, agg] of chunkByDay) {
+        const date = toDateOnly(dateStr);
+        await prisma.fanvueCreatorDailyEarnings.upsert({
+          where: { creatorId_date: { creatorId, date } },
+          create: { creatorId, date, total: round2(agg.total), messages: round2(agg.messages), tips: round2(agg.tips), subscriptions: round2(agg.subscriptions) },
+          update: { total: round2(agg.total), messages: round2(agg.messages), tips: round2(agg.tips), subscriptions: round2(agg.subscriptions) },
+        });
+        dailyRowsUpserted++;
+      }
+
+      chunksProcessed++;
+      await sleep(DELAY_BETWEEN_CHUNKS_MS);
+    }
+
+    return { fanvueUuid: c.fanvueUuid, revenueCentsByDate, pagesFetched, chunksProcessed, dailyRowsUpserted };
+  });
+
+  const settled = await Promise.allSettled(creatorTasks);
+
+  // ── Merge results & write agencyDailyRevenue ──────────────────────────────
+  const globalRevenueCents = new Map<string, number>();
+  let totalPagesFetched = 1; // creators list request
+  let totalChunksProcessed = 0;
+  let totalDailyRowsUpserted = 0;
+  let creatorsProcessed = 0;
+  let creatorsFailedToFetch = 0;
+
+  for (const outcome of settled) {
+    if (outcome.status === "fulfilled") {
+      const r = outcome.value;
+      totalPagesFetched += r.pagesFetched;
+      totalChunksProcessed += r.chunksProcessed;
+      totalDailyRowsUpserted += r.dailyRowsUpserted;
+      for (const [dateStr, cents] of r.revenueCentsByDate) {
+        globalRevenueCents.set(dateStr, (globalRevenueCents.get(dateStr) ?? 0) + cents);
+      }
+      creatorsProcessed++;
+    } else {
+      creatorsFailedToFetch++;
+      if (process.env.NODE_ENV !== "production") {
+        console.error("[fanvue-rebuild] creator task failed:", outcome.reason);
+      }
+    }
+  }
+
+  for (const [dateStr, revenueCents] of globalRevenueCents) {
+    const date = toDateOnly(dateStr);
+    const revenue = revenueCents * CENTS_TO_DOLLARS;
+    await prisma.agencyDailyRevenue.upsert({
+      where: { userId_date: { userId, date } },
+      create: { userId, date, fanvue: revenue, infloww: 0, total: revenue },
+      update: { fanvue: revenue, infloww: 0, total: revenue },
+    });
+  }
+
+  const diag = limiter.diagnostics;
+  console.log("[fanvue-rebuild] completed", {
+    totalCreators: parsedCreators.length,
+    totalChunksPerCreator: chunks.length,
+    totalChunksProcessed,
+    creatorsProcessed,
+    creatorsFailedToFetch,
+    totalPagesFetched,
+    startConcurrency: diag.startConcurrency,
+    maxConcurrencyReached: diag.maxConcurrencyReached,
+    finalConcurrency: diag.finalConcurrency,
+    throttleSignalsReceived: diag.throttleSignalsReceived,
+    concurrencyWasReduced: diag.concurrencyWasReduced,
+  });
 
   return {
     ok: true,
@@ -462,13 +477,15 @@ export async function runFanvueRebuild(
     deletedAgencyRows: r2.count,
     creatorsUpserted: parsedCreators.length,
     creatorsProcessed,
-    chunksProcessed,
-    pagesFetched,
-    dailyRowsUpserted,
+    creatorsFailedToFetch,
+    chunksProcessed: totalChunksProcessed,
+    pagesFetched: totalPagesFetched,
+    dailyRowsUpserted: totalDailyRowsUpserted,
     daysSynced: SYNC_DAYS,
     startDate: range.startUtcIso,
     endDate: range.endUtcIso,
     startLocal: range.startLocal,
     endLocal: range.endLocal,
+    limiterDiagnostics: diag,
   };
 }

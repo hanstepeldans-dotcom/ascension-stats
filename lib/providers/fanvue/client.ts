@@ -123,9 +123,19 @@ const RETRY_DELAYS_MS = [2_000, 5_000, 10_000];
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
+export interface FanvueFetchOptions {
+  /**
+   * Called immediately when a retryable status (429/502/503/504) is first detected,
+   * before the internal retry delay. Use this to signal a rate limiter to back off
+   * concurrency while the retry sleep runs.
+   */
+  onThrottle?: () => void;
+}
+
 export async function fanvueFetch<T = unknown>(
   endpoint: string,
-  accessToken: string
+  accessToken: string,
+  options?: FanvueFetchOptions
 ): Promise<T> {
   const base = getBaseUrl();
   const path = endpoint.startsWith("/") ? endpoint : `/${endpoint}`;
@@ -140,9 +150,10 @@ export async function fanvueFetch<T = unknown>(
     try {
       const res = await fetch(url, { method: "GET", headers });
 
-      // Transient server error — retry if attempts remain
+      // Transient server error — signal limiter and retry if attempts remain
       if (RETRYABLE_STATUSES.has(res.status) && attempt < RETRY_DELAYS_MS.length) {
         lastStatus = res.status;
+        options?.onThrottle?.();
         // Drain body to release connection
         try { await res.text(); } catch { /* ignore */ }
         await sleep(RETRY_DELAYS_MS[attempt]!);
