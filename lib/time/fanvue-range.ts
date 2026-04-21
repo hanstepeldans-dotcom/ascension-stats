@@ -1,6 +1,7 @@
 /**
- * Fanvue sync/period helpers using UTC+02:00 (Europe/Brussels-style) calendar days.
- * Single source of truth for period ranges and local-date bucketing.
+ * Fanvue sync/period helpers using the Europe/Bucharest IANA timezone.
+ * The UTC offset is computed dynamically so it is always correct through
+ * DST transitions (UTC+2 / EET in winter, UTC+3 / EEST in summer).
  */
 
 function pad(n: number): string {
@@ -8,6 +9,64 @@ function pad(n: number): string {
 }
 
 export type FanvuePeriod = "today" | "yesterday" | "week" | "month";
+
+// ─── Dynamic Bucharest offset ─────────────────────────────────────────────────
+
+export const BUCHAREST_TZ = "Europe/Bucharest";
+
+/**
+ * Returns the current UTC offset for Europe/Bucharest in minutes.
+ *   UTC+2 (EET)  = 120  in winter
+ *   UTC+3 (EEST) = 180  in summer
+ *
+ * Computed via Intl so it is automatically correct after every DST change
+ * without any code changes.
+ *
+ * @param date Defaults to now. Pass a specific date to get the offset for
+ *             that instant (useful when bucketing historical earnings).
+ */
+export function getBucharestOffsetMinutes(date: Date = new Date()): number {
+  const fmt = new Intl.DateTimeFormat("en-US", {
+    timeZone: BUCHAREST_TZ,
+    year: "numeric",
+    month: "numeric",
+    day: "numeric",
+    hour: "numeric",
+    minute: "numeric",
+    second: "numeric",
+    hour12: false,
+  });
+
+  const parts = fmt.formatToParts(date);
+  const get = (type: string) =>
+    parseInt(parts.find((p) => p.type === type)?.value ?? "0", 10);
+
+  const year   = get("year");
+  const month  = get("month") - 1; // 0-indexed
+  const day    = get("day");
+  const hour   = get("hour") % 24; // some environments emit "24" for midnight
+  const minute = get("minute");
+  const second = get("second");
+
+  const localAsUtcMs = Date.UTC(year, month, day, hour, minute, second);
+  return Math.round((localAsUtcMs - date.getTime()) / 60_000);
+}
+
+/**
+ * Returns the human-readable UTC offset label for Europe/Bucharest.
+ *   "UTC+02:00" in winter  (EET)
+ *   "UTC+03:00" in summer  (EEST)
+ */
+export function getBucharestTimezoneLabel(date: Date = new Date()): string {
+  const offset  = getBucharestOffsetMinutes(date);
+  const sign    = offset >= 0 ? "+" : "-";
+  const absMin  = Math.abs(offset);
+  const hours   = Math.floor(absMin / 60);
+  const minutes = absMin % 60;
+  return `UTC${sign}${pad(hours)}:${pad(minutes)}`;
+}
+
+// ─── Period ranges ────────────────────────────────────────────────────────────
 
 export interface FanvuePeriodRange {
   startLocal: string;
@@ -19,17 +78,18 @@ export interface FanvuePeriodRange {
 }
 
 /**
- * Single source of truth for Fanvue period ranges in UTC+02:00 (Europe/Brussels).
- * Offset = +120 minutes. Week starts Monday.
+ * Single source of truth for Fanvue period ranges in Europe/Bucharest time.
+ * Defaults to the dynamically computed current Bucharest offset so it is always
+ * correct in both winter (UTC+2) and summer (UTC+3).
  *
- * - today: today 00:00:00 → 23:59:59.999 local UTC+02
- * - yesterday: yesterday 00:00:00 → 23:59:59.999 local UTC+02
- * - week: Monday 00:00:00 of current week (UTC+02) → now
- * - month: first day of month 00:00:00 UTC+02 → now
+ * - today:     today 00:00:00 → 23:59:59.999 local
+ * - yesterday: yesterday 00:00:00 → 23:59:59.999 local
+ * - week:      Monday 00:00:00 of current week → now
+ * - month:     first day of month 00:00:00 → now
  */
 export function getFanvuePeriodRange(
   period: FanvuePeriod,
-  offsetMinutes = 120
+  offsetMinutes = getBucharestOffsetMinutes()
 ): FanvuePeriodRange {
   const now = new Date();
   const offsetMs = offsetMinutes * 60 * 1000;
@@ -45,6 +105,7 @@ export function getFanvuePeriodRange(
   const localEndOfDayUtc = (year: number, month: number, day: number): Date =>
     new Date(Date.UTC(year, month, day, 23, 59, 59, 999) - offsetMs);
 
+  // Determine today's local date components
   const y = now.getUTCFullYear();
   const m = now.getUTCMonth();
   const d = now.getUTCDate();
@@ -60,7 +121,7 @@ export function getFanvuePeriodRange(
   switch (period) {
     case "today": {
       startDateUtc = localMidnightUtc(ly, lm, ld);
-      endDateUtc = localEndOfDayUtc(ly, lm, ld);
+      endDateUtc   = localEndOfDayUtc(ly, lm, ld);
       break;
     }
     case "yesterday": {
@@ -70,67 +131,73 @@ export function getFanvuePeriodRange(
       const mM = yesterday.getUTCMonth();
       const dD = yesterday.getUTCDate();
       startDateUtc = localMidnightUtc(yY, mM, dD);
-      endDateUtc = localEndOfDayUtc(yY, mM, dD);
+      endDateUtc   = localEndOfDayUtc(yY, mM, dD);
       break;
     }
     case "week": {
       const localNoonUtc = new Date(Date.UTC(ly, lm, ld, 10, 0, 0, 0));
-      const day = localNoonUtc.getUTCDay();
+      const day  = localNoonUtc.getUTCDay();
       const diff = (day === 0 ? -6 : 1) - day;
       const mondayRef = new Date(Date.UTC(ly, lm, ld));
       mondayRef.setUTCDate(mondayRef.getUTCDate() + diff);
-      const yMon = mondayRef.getUTCFullYear();
-      const mMon = mondayRef.getUTCMonth();
-      const dMon = mondayRef.getUTCDate();
-      startDateUtc = localMidnightUtc(yMon, mMon, dMon);
+      startDateUtc = localMidnightUtc(
+        mondayRef.getUTCFullYear(),
+        mondayRef.getUTCMonth(),
+        mondayRef.getUTCDate()
+      );
       endDateUtc = now;
       break;
     }
     case "month": {
       startDateUtc = localMidnightUtc(ly, lm, 1);
-      endDateUtc = now;
+      endDateUtc   = now;
       break;
     }
     default: {
       const localNoonUtc = new Date(Date.UTC(ly, lm, ld, 10, 0, 0, 0));
-      const day = localNoonUtc.getUTCDay();
+      const day  = localNoonUtc.getUTCDay();
       const diff = (day === 0 ? -6 : 1) - day;
       const mondayRef = new Date(Date.UTC(ly, lm, ld));
       mondayRef.setUTCDate(mondayRef.getUTCDate() + diff);
-      const yMon = mondayRef.getUTCFullYear();
-      const mMon = mondayRef.getUTCMonth();
-      const dMon = mondayRef.getUTCDate();
-      startDateUtc = localMidnightUtc(yMon, mMon, dMon);
+      startDateUtc = localMidnightUtc(
+        mondayRef.getUTCFullYear(),
+        mondayRef.getUTCMonth(),
+        mondayRef.getUTCDate()
+      );
       endDateUtc = now;
     }
   }
 
   return {
-    startLocal: toLocalDateStr(startDateUtc),
-    endLocal: toLocalDateStr(endDateUtc),
-    startUtcIso: startDateUtc.toISOString(),
-    endUtcIso: endDateUtc.toISOString(),
+    startLocal:   toLocalDateStr(startDateUtc),
+    endLocal:     toLocalDateStr(endDateUtc),
+    startUtcIso:  startDateUtc.toISOString(),
+    endUtcIso:    endDateUtc.toISOString(),
     startDateUtc,
     endDateUtc,
   };
 }
 
 /**
- * Return YYYY-MM-DD for the given timestamp in UTC+offsetMinutes (e.g. 120 = UTC+2).
- * Used to bucket earnings into one row per UTC+2 local day.
+ * Return YYYY-MM-DD for the given timestamp in Europe/Bucharest local time.
+ * Uses the offset for THAT specific date so historical data bucketed across a
+ * DST boundary (e.g. March transition) is always assigned to the correct day.
+ *
+ * @param ts           The earnings timestamp.
+ * @param offsetMinutes Override if needed; defaults to the Bucharest offset for ts.
  */
-export function getLocalDateKey(ts: Date, offsetMinutes: number): string {
-  const offsetMs = offsetMinutes * 60 * 1000;
+export function getLocalDateKey(ts: Date, offsetMinutes?: number): string {
+  const om = offsetMinutes ?? getBucharestOffsetMinutes(ts);
+  const offsetMs = om * 60 * 1000;
   const local = new Date(ts.getTime() + offsetMs);
-  const y = local.getUTCFullYear();
-  const m = local.getUTCMonth() + 1;
+  const y   = local.getUTCFullYear();
+  const mon = local.getUTCMonth() + 1;
   const day = local.getUTCDate();
-  return `${y}-${pad(m)}-${pad(day)}`;
+  return `${y}-${pad(mon)}-${pad(day)}`;
 }
 
-/**
- * Rolling N-day range in UTC+02:00: end = today 23:59:59.999, start = (N-1) days before today 00:00:00.000.
- */
+// ─── Last N days range ────────────────────────────────────────────────────────
+
 export interface FanvueLastNDaysRange {
   startLocal: string;
   endLocal: string;
@@ -140,45 +207,44 @@ export interface FanvueLastNDaysRange {
   endDateUtc: Date;
 }
 
+/**
+ * Rolling N-day range in Europe/Bucharest time.
+ * end = today 23:59:59.999 local, start = (N-1) days before today 00:00:00.
+ */
 export function getFanvueLastNDaysRange(
   days: number,
-  offsetMinutes = 120
+  offsetMinutes = getBucharestOffsetMinutes()
 ): FanvueLastNDaysRange {
   const now = new Date();
   const offsetMs = offsetMinutes * 60 * 1000;
 
   const localRef = new Date(now.getTime() + offsetMs);
-  const endYear = localRef.getUTCFullYear();
+  const endYear  = localRef.getUTCFullYear();
   const endMonth = localRef.getUTCMonth();
-  const endDay = localRef.getUTCDate();
+  const endDay   = localRef.getUTCDate();
 
   const endDateUtc = new Date(
     Date.UTC(endYear, endMonth, endDay, 23, 59, 59, 999) - offsetMs
   );
-  const endLocal = `${endYear}-${pad(endMonth + 1)}-${pad(endDay)}`;
-  const endUtcIso = endDateUtc.toISOString();
+  const endLocal   = `${endYear}-${pad(endMonth + 1)}-${pad(endDay)}`;
+  const endUtcIso  = endDateUtc.toISOString();
 
   const startRef = new Date(Date.UTC(endYear, endMonth, endDay));
   startRef.setUTCDate(startRef.getUTCDate() - (days - 1));
-  const startYear = startRef.getUTCFullYear();
+  const startYear  = startRef.getUTCFullYear();
   const startMonth = startRef.getUTCMonth();
-  const startDay = startRef.getUTCDate();
+  const startDay   = startRef.getUTCDate();
 
   const startDateUtc = new Date(
     Date.UTC(startYear, startMonth, startDay, 0, 0, 0, 0) - offsetMs
   );
-  const startLocal = `${startYear}-${pad(startMonth + 1)}-${pad(startDay)}`;
+  const startLocal  = `${startYear}-${pad(startMonth + 1)}-${pad(startDay)}`;
   const startUtcIso = startDateUtc.toISOString();
 
-  return {
-    startLocal,
-    endLocal,
-    startUtcIso,
-    endUtcIso,
-    startDateUtc,
-    endDateUtc,
-  };
+  return { startLocal, endLocal, startUtcIso, endUtcIso, startDateUtc, endDateUtc };
 }
+
+// ─── Chunk splitting ──────────────────────────────────────────────────────────
 
 export interface FanvueRangeChunk {
   startUtcIso: string;
@@ -187,30 +253,36 @@ export interface FanvueRangeChunk {
   endLocal: string;
 }
 
+/**
+ * Split a UTC date range into chunks of `chunkDays` days.
+ * `offsetMinutes` is used only for the display labels (startLocal/endLocal);
+ * the actual UTC timestamps are authoritative.
+ */
 export function splitRangeIntoChunks(
   startDateUtc: Date,
   endDateUtc: Date,
-  chunkDays: number
+  chunkDays: number,
+  offsetMinutes = getBucharestOffsetMinutes()
 ): FanvueRangeChunk[] {
   const chunks: FanvueRangeChunk[] = [];
-  const offsetMs = 120 * 60 * 1000;
-  const chunkMs = chunkDays * 24 * 60 * 60 * 1000;
+  const offsetMs = offsetMinutes * 60 * 1000;
+  const chunkMs  = chunkDays * 24 * 60 * 60 * 1000;
   let currentStart = startDateUtc.getTime();
   const endMs = endDateUtc.getTime();
 
   while (currentStart <= endMs) {
-    const chunkEndMs = Math.min(currentStart + chunkMs - 1, endMs);
+    const chunkEndMs    = Math.min(currentStart + chunkMs - 1, endMs);
     const chunkStartDate = new Date(currentStart);
-    const chunkEndDate = new Date(chunkEndMs);
+    const chunkEndDate   = new Date(chunkEndMs);
 
     const startLocalRef = new Date(currentStart + offsetMs);
-    const endLocalRef = new Date(chunkEndMs + offsetMs);
+    const endLocalRef   = new Date(chunkEndMs + offsetMs);
     const startLocal = `${startLocalRef.getUTCFullYear()}-${pad(startLocalRef.getUTCMonth() + 1)}-${pad(startLocalRef.getUTCDate())}`;
-    const endLocal = `${endLocalRef.getUTCFullYear()}-${pad(endLocalRef.getUTCMonth() + 1)}-${pad(endLocalRef.getUTCDate())}`;
+    const endLocal   = `${endLocalRef.getUTCFullYear()}-${pad(endLocalRef.getUTCMonth() + 1)}-${pad(endLocalRef.getUTCDate())}`;
 
     chunks.push({
       startUtcIso: chunkStartDate.toISOString(),
-      endUtcIso: chunkEndDate.toISOString(),
+      endUtcIso:   chunkEndDate.toISOString(),
       startLocal,
       endLocal,
     });

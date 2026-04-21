@@ -12,7 +12,6 @@ import { getFanvuePeriodRange, type FanvuePeriod } from "@/lib/time/fanvue-range
 export const dynamic = "force-dynamic";
 
 const NET_TO_GROSS = 1.25;
-const OFFSET_MINUTES = 120; // UTC+02:00
 
 const PERIOD_MAP: Record<string, FanvuePeriod> = {
   yesterday: "yesterday",
@@ -35,7 +34,7 @@ export async function GET(request: Request) {
   const metricType = searchParams.get("metricType") ?? "net";
 
   const period = PERIOD_MAP[periodParam] ?? "week";
-  const range = getFanvuePeriodRange(period, OFFSET_MINUTES);
+  const range = getFanvuePeriodRange(period);
   const mult = metricType === "gross" ? NET_TO_GROSS : 1;
 
   // Fanvue aggregation

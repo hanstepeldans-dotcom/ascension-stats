@@ -10,6 +10,7 @@ import {
   type EarningsOverviewData,
   type MetricType,
 } from "@/components/dashboard/EarningsOverview";
+import { getBucharestTimezoneLabel } from "@/lib/time/fanvue-range";
 
 function getPeriodLabel(range: TimeRange): string {
   switch (range) {
@@ -103,7 +104,7 @@ export default function DashboardPage() {
   }, [currentYear, currentMonth]);
 
   const periodLabel = getPeriodLabel(timeRange);
-  const timezone = "UTC+02:00";
+  const timezone = getBucharestTimezoneLabel();
 
   return (
     <div className="space-y-6">

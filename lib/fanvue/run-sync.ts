@@ -16,7 +16,7 @@
  *     creators are still running (different rows → no DB conflict)
  *   • agencyDailyRevenue is written once at the very end, after all creators finish
  *
- * All date bucketing uses getLocalDateKey(ts, 120) — never UTC date string slicing.
+ * All date bucketing uses getLocalDateKey(ts) with the dynamic Europe/Bucharest offset.
  */
 
 import { prisma } from "@/lib/db";
@@ -30,11 +30,11 @@ import {
   toDateOnly,
   getFanvueLastNDaysRange,
   splitRangeIntoChunks,
+  getBucharestOffsetMinutes,
 } from "@/lib/time/fanvue-range";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const OFFSET_MINUTES    = 120;
 const CENTS_TO_DOLLARS  = 1 / 100;
 const PAGE_SIZE         = 50;   // creators list
 const EARNINGS_PAGE_SIZE = 20;  // earnings pagination (smaller = lighter per request)
@@ -136,7 +136,7 @@ function accumulateItems(
   revenueCentsByDate: Map<string, number>
 ): void {
   for (const { date, amountCents, source } of items) {
-    const key = getLocalDateKey(date, OFFSET_MINUTES);
+    const key = getLocalDateKey(date, getBucharestOffsetMinutes(date));
     revenueCentsByDate.set(key, (revenueCentsByDate.get(key) ?? 0) + amountCents);
     const dollars = amountCents * CENTS_TO_DOLLARS;
     const cur = byDay.get(key) ?? { total: 0, messages: 0, tips: 0, subscriptions: 0 };
@@ -193,7 +193,7 @@ export async function runFanvueSync(
   accessToken: string,
   period: FanvuePeriod
 ): Promise<RunFanvueSyncResult> {
-  const range = getFanvuePeriodRange(period, OFFSET_MINUTES);
+  const range = getFanvuePeriodRange(period);
   const limiter = new AdaptiveLimiter({ initial: LIMITER_INITIAL, max: LIMITER_MAX, min: LIMITER_MIN });
 
   // Fetch creators list (counts toward limiter)
@@ -336,7 +336,7 @@ export async function runFanvueRebuild(
   userId: string,
   accessToken: string
 ): Promise<RunFanvueRebuildResult> {
-  const range  = getFanvueLastNDaysRange(SYNC_DAYS, OFFSET_MINUTES);
+  const range  = getFanvueLastNDaysRange(SYNC_DAYS);
   const chunks = splitRangeIntoChunks(range.startDateUtc, range.endDateUtc, CHUNK_DAYS);
   const limiter = new AdaptiveLimiter({ initial: LIMITER_INITIAL, max: LIMITER_MAX, min: LIMITER_MIN });
 

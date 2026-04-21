@@ -6,7 +6,6 @@ import { fanvueFetchRaw } from "@/lib/providers/fanvue/client";
 import { getFanvueLastNDaysRange } from "@/lib/time/fanvue-range";
 
 const PROVIDER = "FANVUE";
-const OFFSET_MINUTES = 120;
 
 /** Extract the rows array from a response envelope, trying common shapes. */
 function extractRows(json: unknown): unknown[] {
@@ -55,7 +54,7 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  const range = getFanvueLastNDaysRange(7, OFFSET_MINUTES);
+  const range = getFanvueLastNDaysRange(7);
   const q = new URLSearchParams({
     startDate: range.startUtcIso,
     endDate: range.endUtcIso,

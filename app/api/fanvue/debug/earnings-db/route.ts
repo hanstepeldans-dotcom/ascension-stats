@@ -4,7 +4,6 @@ import { authOptions } from "@/lib/auth/config";
 import { prisma } from "@/lib/db";
 import { getFanvuePeriodRange, type FanvuePeriod } from "@/lib/time/fanvue-range";
 
-const FANVUE_OFFSET_MINUTES = 120;
 
 /**
  * GET /api/fanvue/debug/earnings-db?period=week|month|today|yesterday
@@ -23,7 +22,7 @@ export async function GET(request: Request) {
   const period = (searchParams.get("period") ?? "week") as FanvuePeriod;
   const userId = session.user.id;
 
-  const range = getFanvuePeriodRange(period, FANVUE_OFFSET_MINUTES);
+  const range = getFanvuePeriodRange(period);
 
   const [creatorsCount, dailyRowsCount, dateRange, sampleRows, earningsGrouped] =
     await Promise.all([

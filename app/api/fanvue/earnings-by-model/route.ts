@@ -5,7 +5,6 @@ import { prisma } from "@/lib/db";
 import { getFanvuePeriodRange, type FanvuePeriod } from "@/lib/time/fanvue-range";
 
 const NET_TO_GROSS = 1.25;
-const FANVUE_OFFSET_MINUTES = 120;
 
 export interface ModelEarningsResponse {
   modelId: string;
@@ -31,7 +30,7 @@ export async function GET(request: Request) {
   const period = (searchParams.get("period") ?? "week") as FanvuePeriod;
   const metricType = searchParams.get("metricType") ?? "net";
 
-  const range = getFanvuePeriodRange(period, FANVUE_OFFSET_MINUTES);
+  const range = getFanvuePeriodRange(period);
 
   const mult = metricType === "gross" ? NET_TO_GROSS : 1;
 

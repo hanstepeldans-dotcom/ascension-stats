@@ -1,7 +1,7 @@
 /**
  * GET /api/fanvue/summary?period=today|yesterday|week|month&metricType=net|gross
- * Returns combined Fanvue totals for the period. Same source as earnings-by-model (FanvueCreatorDailyEarnings).
- * All calculations use getFanvuePeriodRange(period, 120) — UTC+02:00.
+ * Returns combined Fanvue totals for the period. Same source as earnings-by-model.
+ * Period boundaries use Europe/Bucharest time (dynamic DST-aware offset).
  */
 
 import { getServerSession } from "next-auth";
@@ -11,7 +11,6 @@ import { prisma } from "@/lib/db";
 import { getFanvuePeriodRange, type FanvuePeriod } from "@/lib/time/fanvue-range";
 
 const NET_TO_GROSS = 1.25;
-const FANVUE_OFFSET_MINUTES = 120;
 
 const PERIOD_MAP: Record<string, FanvuePeriod> = {
   today: "today",
@@ -31,7 +30,7 @@ export async function GET(request: Request) {
   const metricType = searchParams.get("metricType") ?? "net";
 
   const period = PERIOD_MAP[periodParam] ?? "week";
-  const range = getFanvuePeriodRange(period, FANVUE_OFFSET_MINUTES);
+  const range = getFanvuePeriodRange(period);
   const mult = metricType === "gross" ? NET_TO_GROSS : 1;
 
   const agg = await prisma.fanvueCreatorDailyEarnings.aggregate({

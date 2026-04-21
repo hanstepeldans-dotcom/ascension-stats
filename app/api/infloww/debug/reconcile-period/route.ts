@@ -6,7 +6,6 @@ import { authOptions } from "@/lib/auth/config";
 import { prisma } from "@/lib/db";
 import { getFanvuePeriodRange, type FanvuePeriod } from "@/lib/time/fanvue-range";
 
-const OFFSET_MINUTES = 120;
 
 /**
  * GET /api/infloww/debug/reconcile-period?period=today|yesterday|week|month
@@ -36,7 +35,7 @@ export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const period = (searchParams.get("period") ?? "today") as FanvuePeriod;
 
-  const range = getFanvuePeriodRange(period, OFFSET_MINUTES);
+  const range = getFanvuePeriodRange(period);
 
   const rows = await prisma.inflowwCreatorDailyEarnings.findMany({
     where: {

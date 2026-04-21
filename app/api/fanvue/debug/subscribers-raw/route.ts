@@ -57,7 +57,6 @@ function extractPaginationInfo(json: unknown): Record<string, unknown> {
   return out;
 }
 
-const OFFSET_MINUTES = 120;
 
 /**
  * GET /api/fanvue/debug/subscribers-raw?creatorUuid=<uuid>
@@ -92,7 +91,7 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  const range = getFanvueLastNDaysRange(7, OFFSET_MINUTES);
+  const range = getFanvueLastNDaysRange(7);
   const q = new URLSearchParams({
     startDate: range.startUtcIso,
     endDate: range.endUtcIso,

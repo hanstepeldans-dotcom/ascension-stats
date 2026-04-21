@@ -8,6 +8,7 @@ import {
   type PeriodValue,
   type MetricTypeValue,
 } from "@/components/overview/EarningsOverviewLayout";
+import { getBucharestTimezoneLabel } from "@/lib/time/fanvue-range";
 import { ModelsEarningsTable } from "@/components/overview/ModelsEarningsTable";
 import { ChattingAnalyticsTable } from "@/components/overview/ChattingAnalyticsTable";
 
@@ -120,7 +121,7 @@ export default function InflowwPage() {
     <div className="space-y-6">
       <EarningsOverviewLayout
         title="Creator earnings overview"
-        timezoneLabel="UTC+02:00"
+        timezoneLabel={getBucharestTimezoneLabel()}
         data={metrics}
         metricType={metricType}
         onMetricTypeChange={setMetricType}

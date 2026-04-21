@@ -10,7 +10,6 @@ import { authOptions } from "@/lib/auth/config";
 import { prisma } from "@/lib/db";
 import { getFanvuePeriodRange, type FanvuePeriod } from "@/lib/time/fanvue-range";
 
-const FANVUE_OFFSET_MINUTES = 120;
 
 const PERIOD_MAP: Record<string, FanvuePeriod> = {
   today: "today",
@@ -31,7 +30,7 @@ export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const periodParam = searchParams.get("period") ?? "week";
   const period = PERIOD_MAP[periodParam] ?? "week";
-  const range = getFanvuePeriodRange(period, FANVUE_OFFSET_MINUTES);
+  const range = getFanvuePeriodRange(period);
   const userId = session.user.id;
 
   const creators = await prisma.fanvueCreator.findMany({
