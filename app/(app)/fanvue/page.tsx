@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useMemo } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSession } from "next-auth/react";
 import {
   EarningsOverviewLayout,
@@ -12,6 +12,7 @@ import {
 import { getBucharestTimezoneLabel } from "@/lib/time/fanvue-range";
 import { ModelsEarningsTable } from "@/components/overview/ModelsEarningsTable";
 import { ChattingAnalyticsTable } from "@/components/overview/ChattingAnalyticsTable";
+import { RefreshCw } from "lucide-react";
 
 const PERIOD_LABELS: Record<PeriodValue, string> = {
   yesterday: "Yesterday",
@@ -31,6 +32,32 @@ export default function FanvuePage() {
   const { data: session } = useSession();
   const [period, setPeriod] = useState<PeriodValue>("week");
   const [metricType, setMetricType] = useState<MetricTypeValue>("net");
+  const [syncing, setSyncing] = useState(false);
+  const [syncMsg, setSyncMsg] = useState<string | null>(null);
+  const queryClient = useQueryClient();
+  const isAdmin = session?.user?.role === "ADMIN";
+
+  const handleSync = async () => {
+    setSyncing(true);
+    setSyncMsg(null);
+    try {
+      const res = await fetch(`/api/fanvue/sync?period=${period}`, { method: "POST" });
+      const json = await res.json() as { ok?: boolean; creatorsProcessed?: number; creatorsFailedToFetch?: number; dailyRowsUpserted?: number; error?: string };
+      if (json.ok) {
+        setSyncMsg(
+          `Synced ${json.creatorsProcessed ?? 0} creators, ${json.dailyRowsUpserted ?? 0} rows.` +
+          (json.creatorsFailedToFetch ? ` (${json.creatorsFailedToFetch} failed)` : "")
+        );
+        await queryClient.invalidateQueries({ queryKey: ["fanvue"] });
+      } else {
+        setSyncMsg(`Sync failed: ${json.error ?? "unknown error"}`);
+      }
+    } catch (e) {
+      setSyncMsg(`Sync error: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setSyncing(false);
+    }
+  };
 
   const [manualSubs, setManualSubs] = useState<Record<string, number>>(() => {
     if (typeof window === "undefined") return {};
@@ -48,8 +75,6 @@ export default function FanvuePage() {
       return next;
     });
   };
-  const isAdminDev =
-    process.env.NODE_ENV !== "production" && session?.user?.role === "ADMIN";
 
   const { data: summaryData } = useQuery({
     queryKey: ["fanvue", "summary", period, metricType],
@@ -127,6 +152,23 @@ export default function FanvuePage() {
         period={period}
         onPeriodChange={setPeriod}
       />
+
+      {isAdmin && (
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => void handleSync()}
+            disabled={syncing}
+            className="flex items-center gap-2 rounded-md border border-zinc-700 bg-zinc-800 px-3 py-1.5 text-sm text-zinc-200 hover:bg-zinc-700 disabled:opacity-50 transition-colors"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${syncing ? "animate-spin" : ""}`} />
+            {syncing ? "Syncing…" : `Sync ${PERIOD_LABELS[period]}`}
+          </button>
+          {syncMsg && (
+            <span className="text-xs text-zinc-400">{syncMsg}</span>
+          )}
+        </div>
+      )}
+
       <ModelsEarningsTable
         rows={modelRows}
         periodLabel={PERIOD_LABELS[period]}
@@ -137,15 +179,31 @@ export default function FanvuePage() {
         periodLabel={PERIOD_LABELS[period]}
         onSubsChange={handleSubsChange}
       />
-      {isAdminDev && (
-        <p className="text-xs text-zinc-500">
+      {isAdmin && (
+        <p className="text-xs text-zinc-500 flex gap-4">
           <a
             href={`/api/fanvue/debug/earnings-db?period=${period}`}
             target="_blank"
             rel="noopener noreferrer"
             className="text-pink-400 hover:underline"
           >
-            Debug earnings DB
+            Debug DB
+          </a>
+          <a
+            href={`/api/fanvue/debug/live-vs-db?period=${period}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-pink-400 hover:underline"
+          >
+            Debug live vs DB
+          </a>
+          <a
+            href={`/api/fanvue/debug/reconcile-period?period=${period}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-pink-400 hover:underline"
+          >
+            Debug reconcile
           </a>
         </p>
       )}

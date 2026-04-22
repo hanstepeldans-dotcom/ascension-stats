@@ -279,9 +279,8 @@ export async function runFanvueSync(
       creatorsProcessed++;
     } else {
       creatorsFailedToFetch++;
-      if (process.env.NODE_ENV !== "production") {
-        console.error("[fanvue-sync] creator task failed:", outcome.reason);
-      }
+      // Always log creator failures so they show up in Render logs
+      console.error("[fanvue-sync] creator task failed:", outcome.reason);
     }
   }
 
@@ -439,9 +438,8 @@ export async function runFanvueRebuild(
       creatorsProcessed++;
     } else {
       creatorsFailedToFetch++;
-      if (process.env.NODE_ENV !== "production") {
-        console.error("[fanvue-rebuild] creator task failed:", outcome.reason);
-      }
+      // Always log creator failures so they show up in Render logs
+      console.error("[fanvue-rebuild] creator task failed:", outcome.reason);
     }
   }
 
