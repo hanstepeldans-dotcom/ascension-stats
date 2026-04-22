@@ -780,7 +780,7 @@ function SettingsContent() {
                     <DialogTitle className="text-white">Rebuild Fanvue earnings</DialogTitle>
                   </DialogHeader>
                   <p className="text-sm text-zinc-400">
-                    This will clear and re-import Fanvue earnings data for this month (UTC+2). Continue?
+                    This will clear and re-import Fanvue earnings data for the last 33 days (Europe/Bucharest time). Continue?
                   </p>
                   <div className="flex gap-2 justify-end pt-2">
                     <Button
