@@ -721,6 +721,17 @@ function SettingsContent() {
                       Force fresh Fanvue auth
                     </Button>
                   )}
+                  {fanvueConnected && session?.user?.role === "ADMIN" && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="border-rose-500/40 text-rose-400 hover:bg-rose-500/10 hover:text-rose-300"
+                      disabled={rebuildLoading || syncLoading}
+                      onClick={() => setRebuildConfirmOpen(true)}
+                    >
+                      Rebuild Fanvue sync
+                    </Button>
+                  )}
                   {fanvueConnected ? (
                     <Button
                       variant="outline"
