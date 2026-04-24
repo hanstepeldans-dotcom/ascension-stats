@@ -12,7 +12,8 @@ import { prisma } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
-const NET_TO_GROSS = 1.25;
+// Fanvue keeps ~25% of fan spend; creator net × (1/0.75) = gross fan spend
+const NET_TO_GROSS = 4 / 3;
 
 function formatDateKey(d: Date): string {
   const y = d.getUTCFullYear();

@@ -4,7 +4,8 @@ import { authOptions } from "@/lib/auth/config";
 import { prisma } from "@/lib/db";
 import { getFanvuePeriodRange, type FanvuePeriod } from "@/lib/time/fanvue-range";
 
-const NET_TO_GROSS = 1.25;
+// Fanvue keeps ~25% of fan spend; creator net × (1/0.75) = gross fan spend
+const NET_TO_GROSS = 4 / 3;
 
 export interface ModelEarningsResponse {
   modelId: string;
