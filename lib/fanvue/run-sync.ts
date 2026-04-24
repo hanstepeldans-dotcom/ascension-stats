@@ -72,16 +72,62 @@ function getEarningsArray(payload: unknown): unknown[] {
   if (Array.isArray(payload)) return payload;
   const p = payload as Record<string, unknown> | null;
   if (!p || typeof p !== "object") return [];
-  if (Array.isArray(p.data)) return p.data;
-  if (Array.isArray(p.items)) return p.items;
+  // Common field names for the items array
+  for (const key of ["data", "items", "results", "earnings", "records", "content"]) {
+    if (Array.isArray(p[key])) return p[key] as unknown[];
+  }
   return [];
 }
 
-function getNextCursor(payload: unknown): string | null {
+/**
+ * Extract the next-page cursor from a variety of response shapes.
+ * Checks top-level keys, nested pagination/meta objects, and URL-style "next" links.
+ */
+function getNextCursor(payload: unknown, pageSize: number, itemCount: number): string | null {
   const p = payload as Record<string, unknown> | null;
-  if (!p) return null;
-  const c = p.nextCursor ?? p.next_cursor ?? p.cursor;
-  return typeof c === "string" && c ? c : null;
+  if (!p || typeof p !== "object") return null;
+
+  // Top-level cursor fields
+  for (const key of ["nextCursor", "next_cursor", "cursor", "afterCursor", "after"]) {
+    const v = p[key];
+    if (typeof v === "string" && v) return v;
+  }
+
+  // Top-level "next" that might be a URL (extract cursor= param) or a bare cursor
+  if (typeof p.next === "string" && p.next) {
+    try {
+      const url = new URL(p.next, "https://api.fanvue.com");
+      const c = url.searchParams.get("cursor") ?? url.searchParams.get("after");
+      if (c) return c;
+    } catch {
+      // Not a URL — treat as raw cursor string
+      return p.next;
+    }
+  }
+
+  // Nested objects: pagination, meta, links, pageInfo
+  for (const nsKey of ["pagination", "meta", "links", "pageInfo", "paging"]) {
+    const ns = p[nsKey];
+    if (!ns || typeof ns !== "object") continue;
+    const nsObj = ns as Record<string, unknown>;
+    for (const key of ["cursor", "nextCursor", "next_cursor", "next", "afterCursor", "after", "endCursor"]) {
+      const v = nsObj[key];
+      if (typeof v === "string" && v) return v;
+    }
+    // Boolean hasMore + page-number (for page-based pagination)
+    if (nsObj.hasMore === true || nsObj.has_more === true) {
+      const page = typeof nsObj.page === "number" ? nsObj.page : null;
+      if (page !== null) return String(page + 1);
+    }
+  }
+
+  // hasMore flag at top level with a separate cursor or page
+  if ((p.hasMore === true || p.has_more === true) && itemCount >= pageSize) {
+    const page = typeof p.page === "number" ? p.page : null;
+    if (page !== null) return String(page + 1);
+  }
+
+  return null;
 }
 
 function parseCreatorsList(
@@ -213,6 +259,15 @@ export async function runFanvueSync(
     fanvueUuidToCreatorId.set(c.fanvueUuid, creator.id);
   }
 
+  // Clear existing data for this period so partial syncs can't corrupt stored totals.
+  // We delete only after successfully obtaining the creators list.
+  await prisma.fanvueCreatorDailyEarnings.deleteMany({
+    where: { creator: { userId }, date: { gte: range.startDateUtc, lte: range.endDateUtc } },
+  });
+  await prisma.agencyDailyRevenue.deleteMany({
+    where: { userId, date: { gte: range.startDateUtc, lte: range.endDateUtc } },
+  });
+
   // ── Launch all creators concurrently ──────────────────────────────────────
   const creatorTasks = parsedCreators.map(async (c): Promise<CreatorTaskResult> => {
     const creatorId = fanvueUuidToCreatorId.get(c.fanvueUuid);
@@ -239,8 +294,13 @@ export async function runFanvueSync(
         )
       );
       pagesFetched++;
-      accumulateItems(parseEarningsItems(earnings), byDay, revenueCentsByDate);
-      cursor = getNextCursor(earnings);
+      const pageItems = parseEarningsItems(earnings);
+      accumulateItems(pageItems, byDay, revenueCentsByDate);
+      cursor = getNextCursor(earnings, EARNINGS_PAGE_SIZE, pageItems.length);
+      if (!cursor && pageItems.length >= EARNINGS_PAGE_SIZE) {
+        // Got a full page but no cursor — log in case API changed its pagination shape
+        console.warn(`[fanvue-sync] ${c.fanvueUuid}: got ${pageItems.length} items but no next cursor — possible truncation`);
+      }
       if (cursor) await sleep(DELAY_BETWEEN_PAGES_MS);
     } while (cursor);
 
@@ -393,8 +453,12 @@ export async function runFanvueRebuild(
           )
         );
         pagesFetched++;
-        accumulateItems(parseEarningsItems(earnings), chunkByDay, revenueCentsByDate);
-        cursor = getNextCursor(earnings);
+        const chunkPageItems = parseEarningsItems(earnings);
+        accumulateItems(chunkPageItems, chunkByDay, revenueCentsByDate);
+        cursor = getNextCursor(earnings, EARNINGS_PAGE_SIZE, chunkPageItems.length);
+        if (!cursor && chunkPageItems.length >= EARNINGS_PAGE_SIZE) {
+          console.warn(`[fanvue-rebuild] ${c.fanvueUuid}: got ${chunkPageItems.length} items but no next cursor — possible truncation`);
+        }
         if (cursor) await sleep(DELAY_BETWEEN_PAGES_MS);
       } while (cursor);
 

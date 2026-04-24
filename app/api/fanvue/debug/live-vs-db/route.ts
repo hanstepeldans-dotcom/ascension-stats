@@ -215,7 +215,7 @@ export async function GET(request: Request) {
     creatorsInDb: creators.length,
     summary: {
       dbGrandTotalNet: Math.round(dbGrandTotal * 100) / 100,
-      dbGrandTotalGross: Math.round(dbGrandTotal * (4 / 3) * 100) / 100,
+      dbGrandTotalGross: Math.round(dbGrandTotal * 1.25 * 100) / 100,
       liveApiFirstPageRawTotal: Math.round(liveGrandRawTotal * 100) / 100,
       liveApiFirstPageRawTotalDividedBy100: Math.round(liveGrandRawTotalDiv100 * 100) / 100,
       note: "If liveApiFirstPageRawTotal ≈ dbGrandTotalNet × 100 → amounts are in cents not dollars",
