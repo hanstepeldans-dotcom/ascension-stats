@@ -83,7 +83,7 @@ function getEarningsArray(payload: unknown): unknown[] {
  * Extract the next-page cursor from a variety of response shapes.
  * Checks top-level keys, nested pagination/meta objects, and URL-style "next" links.
  */
-function getNextCursor(payload: unknown, pageSize: number, itemCount: number): string | null {
+function getNextCursor(payload: unknown): string | null {
   const p = payload as Record<string, unknown> | null;
   if (!p || typeof p !== "object") return null;
 
@@ -114,17 +114,43 @@ function getNextCursor(payload: unknown, pageSize: number, itemCount: number): s
       const v = nsObj[key];
       if (typeof v === "string" && v) return v;
     }
-    // Boolean hasMore + page-number (for page-based pagination)
-    if (nsObj.hasMore === true || nsObj.has_more === true) {
-      const page = typeof nsObj.page === "number" ? nsObj.page : null;
-      if (page !== null) return String(page + 1);
-    }
   }
 
-  // hasMore flag at top level with a separate cursor or page
-  if ((p.hasMore === true || p.has_more === true) && itemCount >= pageSize) {
-    const page = typeof p.page === "number" ? p.page : null;
-    if (page !== null) return String(page + 1);
+  return null;
+}
+
+type PaginationToken =
+  | { kind: "cursor"; value: string }
+  | { kind: "page"; value: number };
+
+function getNextPaginationToken(
+  payload: unknown,
+  pageSize: number,
+  itemCount: number
+): PaginationToken | null {
+  const nextCursor = getNextCursor(payload);
+  if (nextCursor) {
+    // Numeric cursor-like values from explicit cursor fields are still treated as cursors.
+    return { kind: "cursor", value: nextCursor };
+  }
+
+  const p = payload as Record<string, unknown> | null;
+  if (!p || typeof p !== "object") return null;
+
+  // Some endpoints use hasMore + page (page-based pagination without cursor fields).
+  const topHasMore = p.hasMore === true || p.has_more === true;
+  if (topHasMore && typeof p.page === "number" && Number.isFinite(p.page)) {
+    return { kind: "page", value: p.page + 1 };
+  }
+
+  for (const nsKey of ["pagination", "meta", "pageInfo", "paging"]) {
+    const ns = p[nsKey];
+    if (!ns || typeof ns !== "object") continue;
+    const nsObj = ns as Record<string, unknown>;
+    const nsHasMore = nsObj.hasMore === true || nsObj.has_more === true;
+    if (nsHasMore && typeof nsObj.page === "number" && Number.isFinite(nsObj.page)) {
+      return { kind: "page", value: nsObj.page + 1 };
+    }
   }
 
   return null;
@@ -242,11 +268,26 @@ export async function runFanvueSync(
   const range = getFanvuePeriodRange(period);
   const limiter = new AdaptiveLimiter({ initial: LIMITER_INITIAL, max: LIMITER_MAX, min: LIMITER_MIN });
 
-  // Fetch creators list (counts toward limiter)
-  const creatorsPayload = await limiter.run(() =>
-    fanvueFetch<unknown>(`/creators?page=1&size=${PAGE_SIZE}`, accessToken, throttleOpt(limiter))
-  );
-  const parsedCreators = parseCreatorsList(creatorsPayload);
+  // Fetch full creators list (counts toward limiter)
+  const parsedCreators: { fanvueUuid: string; handle?: string; displayName?: string; avatarUrl?: string }[] = [];
+  let creatorsPagesFetched = 0;
+  let creatorsPageToken: PaginationToken | null = { kind: "page", value: 1 };
+  do {
+    const q = new URLSearchParams({ size: String(PAGE_SIZE) });
+    if (creatorsPageToken?.kind === "page") q.set("page", String(creatorsPageToken.value));
+    if (creatorsPageToken?.kind === "cursor") q.set("cursor", creatorsPageToken.value);
+    const creatorsPayload = await limiter.run(() =>
+      fanvueFetch<unknown>(`/creators?${q}`, accessToken, throttleOpt(limiter))
+    );
+    creatorsPagesFetched++;
+    const pageCreators = parseCreatorsList(creatorsPayload);
+    parsedCreators.push(...pageCreators);
+    creatorsPageToken = getNextPaginationToken(creatorsPayload, PAGE_SIZE, pageCreators.length);
+    if (!creatorsPageToken && pageCreators.length >= PAGE_SIZE) {
+      console.warn(`[fanvue-sync] creators: got ${pageCreators.length} items but no pagination token — possible truncation`);
+    }
+    if (creatorsPageToken) await sleep(DELAY_BETWEEN_PAGES_MS);
+  } while (creatorsPageToken);
 
   // Upsert creator records sequentially (DB only, not API)
   const fanvueUuidToCreatorId = new Map<string, string>();
@@ -276,7 +317,7 @@ export async function runFanvueSync(
     const byDay = new Map<string, DayAgg>();
     const revenueCentsByDate = new Map<string, number>();
     let pagesFetched = 0;
-    let cursor: string | null = null;
+    let earningsPageToken: PaginationToken | null = null;
 
     // Paginate the full range (no chunks for regular sync)
     do {
@@ -284,8 +325,9 @@ export async function runFanvueSync(
         startDate: range.startUtcIso,
         endDate:   range.endUtcIso,
         size:      String(EARNINGS_PAGE_SIZE),
-        ...(cursor && { cursor }),
       });
+      if (earningsPageToken?.kind === "cursor") q.set("cursor", earningsPageToken.value);
+      if (earningsPageToken?.kind === "page") q.set("page", String(earningsPageToken.value));
       const earnings = await limiter.run(() =>
         fanvueFetch<unknown>(
           `/creators/${encodeURIComponent(c.fanvueUuid)}/insights/earnings?${q}`,
@@ -296,13 +338,13 @@ export async function runFanvueSync(
       pagesFetched++;
       const pageItems = parseEarningsItems(earnings);
       accumulateItems(pageItems, byDay, revenueCentsByDate);
-      cursor = getNextCursor(earnings, EARNINGS_PAGE_SIZE, pageItems.length);
-      if (!cursor && pageItems.length >= EARNINGS_PAGE_SIZE) {
+      earningsPageToken = getNextPaginationToken(earnings, EARNINGS_PAGE_SIZE, pageItems.length);
+      if (!earningsPageToken && pageItems.length >= EARNINGS_PAGE_SIZE) {
         // Got a full page but no cursor — log in case API changed its pagination shape
-        console.warn(`[fanvue-sync] ${c.fanvueUuid}: got ${pageItems.length} items but no next cursor — possible truncation`);
+        console.warn(`[fanvue-sync] ${c.fanvueUuid}: got ${pageItems.length} items but no next pagination token — possible truncation`);
       }
-      if (cursor) await sleep(DELAY_BETWEEN_PAGES_MS);
-    } while (cursor);
+      if (earningsPageToken) await sleep(DELAY_BETWEEN_PAGES_MS);
+    } while (earningsPageToken);
 
     // Write this creator's rows to DB (runs concurrently with other creators; different rows → no conflict)
     let dailyRowsUpserted = 0;
@@ -323,7 +365,7 @@ export async function runFanvueSync(
 
   // ── Merge results & write agencyDailyRevenue ──────────────────────────────
   const globalRevenueCents = new Map<string, number>();
-  let totalPagesFetched = 1; // creators list request
+  let totalPagesFetched = creatorsPagesFetched;
   let totalDailyRowsUpserted = 0;
   let creatorsProcessed = 0;
   let creatorsFailedToFetch = 0;
@@ -407,11 +449,26 @@ export async function runFanvueRebuild(
     where: { userId, date: { gte: range.startDateUtc, lte: range.endDateUtc } },
   });
 
-  // Fetch creators list
-  const creatorsPayload = await limiter.run(() =>
-    fanvueFetch<unknown>(`/creators?page=1&size=${PAGE_SIZE}`, accessToken, throttleOpt(limiter))
-  );
-  const parsedCreators = parseCreatorsList(creatorsPayload);
+  // Fetch full creators list
+  const parsedCreators: { fanvueUuid: string; handle?: string; displayName?: string; avatarUrl?: string }[] = [];
+  let creatorsPagesFetched = 0;
+  let creatorsPageToken: PaginationToken | null = { kind: "page", value: 1 };
+  do {
+    const q = new URLSearchParams({ size: String(PAGE_SIZE) });
+    if (creatorsPageToken?.kind === "page") q.set("page", String(creatorsPageToken.value));
+    if (creatorsPageToken?.kind === "cursor") q.set("cursor", creatorsPageToken.value);
+    const creatorsPayload = await limiter.run(() =>
+      fanvueFetch<unknown>(`/creators?${q}`, accessToken, throttleOpt(limiter))
+    );
+    creatorsPagesFetched++;
+    const pageCreators = parseCreatorsList(creatorsPayload);
+    parsedCreators.push(...pageCreators);
+    creatorsPageToken = getNextPaginationToken(creatorsPayload, PAGE_SIZE, pageCreators.length);
+    if (!creatorsPageToken && pageCreators.length >= PAGE_SIZE) {
+      console.warn(`[fanvue-rebuild] creators: got ${pageCreators.length} items but no pagination token — possible truncation`);
+    }
+    if (creatorsPageToken) await sleep(DELAY_BETWEEN_PAGES_MS);
+  } while (creatorsPageToken);
 
   const fanvueUuidToCreatorId = new Map<string, string>();
   for (const c of parsedCreators) {
@@ -436,15 +493,16 @@ export async function runFanvueRebuild(
     for (const chunk of chunks) {
       // Accumulate this chunk's data into a temporary map
       const chunkByDay = new Map<string, DayAgg>();
-      let cursor: string | null = null;
+      let earningsPageToken: PaginationToken | null = null;
 
       do {
         const q = new URLSearchParams({
           startDate: chunk.startUtcIso,
           endDate:   chunk.endUtcIso,
           size:      String(EARNINGS_PAGE_SIZE),
-          ...(cursor && { cursor }),
         });
+        if (earningsPageToken?.kind === "cursor") q.set("cursor", earningsPageToken.value);
+        if (earningsPageToken?.kind === "page") q.set("page", String(earningsPageToken.value));
         const earnings = await limiter.run(() =>
           fanvueFetch<unknown>(
             `/creators/${encodeURIComponent(c.fanvueUuid)}/insights/earnings?${q}`,
@@ -455,12 +513,12 @@ export async function runFanvueRebuild(
         pagesFetched++;
         const chunkPageItems = parseEarningsItems(earnings);
         accumulateItems(chunkPageItems, chunkByDay, revenueCentsByDate);
-        cursor = getNextCursor(earnings, EARNINGS_PAGE_SIZE, chunkPageItems.length);
-        if (!cursor && chunkPageItems.length >= EARNINGS_PAGE_SIZE) {
-          console.warn(`[fanvue-rebuild] ${c.fanvueUuid}: got ${chunkPageItems.length} items but no next cursor — possible truncation`);
+        earningsPageToken = getNextPaginationToken(earnings, EARNINGS_PAGE_SIZE, chunkPageItems.length);
+        if (!earningsPageToken && chunkPageItems.length >= EARNINGS_PAGE_SIZE) {
+          console.warn(`[fanvue-rebuild] ${c.fanvueUuid}: got ${chunkPageItems.length} items but no next pagination token — possible truncation`);
         }
-        if (cursor) await sleep(DELAY_BETWEEN_PAGES_MS);
-      } while (cursor);
+        if (earningsPageToken) await sleep(DELAY_BETWEEN_PAGES_MS);
+      } while (earningsPageToken);
 
       // ── Chunk-by-chunk save: write immediately while other creators still run ──
       for (const [dateStr, agg] of chunkByDay) {
@@ -484,7 +542,7 @@ export async function runFanvueRebuild(
 
   // ── Merge results & write agencyDailyRevenue ──────────────────────────────
   const globalRevenueCents = new Map<string, number>();
-  let totalPagesFetched = 1; // creators list request
+  let totalPagesFetched = creatorsPagesFetched;
   let totalChunksProcessed = 0;
   let totalDailyRowsUpserted = 0;
   let creatorsProcessed = 0;
