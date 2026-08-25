@@ -35,7 +35,10 @@ import {
 import { getLocalDateKey, getBucharestOffsetMinutes, toDateOnly } from "@/lib/time/fanvue-range";
 
 const CENTS_TO_DOLLARS = 1 / 100;
-const DEFAULT_SYNC_DAYS = 7;
+// Cover the whole current calendar month (max 31 days) plus a buffer for the
+// week that can span the month start and any DST edge — so "This week" and
+// "This month" totals are complete, not just the last few days.
+const DEFAULT_SYNC_DAYS = 40;
 const DELAY_BETWEEN_CREATORS_MS = 120; // gentle spacing under the 1000 QPM agency cap
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
