@@ -31,7 +31,9 @@ export async function GET(request: Request) {
   const yearParam = searchParams.get("year");
   const monthParam = searchParams.get("month");
   const metricType = searchParams.get("metricType") ?? "net";
-  const mult = metricType === "gross" ? NET_TO_GROSS : 1;
+  // Fanvue rows store NET → gross = net × 1.25. Infloww rows store GROSS → net = gross × 0.8.
+  const fanvueMult = metricType === "gross" ? NET_TO_GROSS : 1;
+  const inflowwMult = metricType === "gross" ? 1 : 1 / NET_TO_GROSS;
 
   let startUtc: Date | undefined;
   let endUtc: Date | undefined;
@@ -87,10 +89,10 @@ export async function GET(request: Request) {
 
   return NextResponse.json({
     dates: sortedDates,
-    fanvue: sortedDates.map((d) => round((byDate[d]?.fanvue ?? 0) * mult)),
-    infloww: sortedDates.map((d) => round((byDate[d]?.infloww ?? 0) * mult)),
+    fanvue: sortedDates.map((d) => round((byDate[d]?.fanvue ?? 0) * fanvueMult)),
+    infloww: sortedDates.map((d) => round((byDate[d]?.infloww ?? 0) * inflowwMult)),
     total: sortedDates.map((d) =>
-      round(((byDate[d]?.fanvue ?? 0) + (byDate[d]?.infloww ?? 0)) * mult)
+      round((byDate[d]?.fanvue ?? 0) * fanvueMult + (byDate[d]?.infloww ?? 0) * inflowwMult)
     ),
   });
 }

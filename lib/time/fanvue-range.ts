@@ -105,15 +105,14 @@ export function getFanvuePeriodRange(
   const localEndOfDayUtc = (year: number, month: number, day: number): Date =>
     new Date(Date.UTC(year, month, day, 23, 59, 59, 999) - offsetMs);
 
-  // Determine today's local date components
-  const y = now.getUTCFullYear();
-  const m = now.getUTCMonth();
-  const d = now.getUTCDate();
-
-  const localRef = new Date(Date.UTC(y, m, d, 12, 0, 0, 0) + offsetMs);
-  const ly = localRef.getUTCFullYear();
-  const lm = localRef.getUTCMonth();
-  const ld = localRef.getUTCDate();
+  // Determine today's LOCAL (Bucharest) date components from `now` shifted by the
+  // local offset. Using now.getUTCDate() directly is wrong late in the UTC day:
+  // e.g. 22:40 UTC is already the next calendar day in Bucharest (+03:00), so the
+  // "today" window must be that next day, not the UTC day.
+  const localNow = new Date(now.getTime() + offsetMs);
+  const ly = localNow.getUTCFullYear();
+  const lm = localNow.getUTCMonth();
+  const ld = localNow.getUTCDate();
 
   let startDateUtc: Date;
   let endDateUtc: Date;

@@ -6,7 +6,9 @@ import { authOptions } from "@/lib/auth/config";
 import { prisma } from "@/lib/db";
 import { getFanvuePeriodRange, type FanvuePeriod } from "@/lib/time/fanvue-range";
 
-const NET_TO_GROSS = 1.25;
+// Infloww rows store GROSS amounts (what the fan paid). Net = gross minus the
+// platform's 20% cut. So gross is shown as-is; net is gross × 0.8.
+const GROSS_TO_NET = 0.8;
 
 export interface ModelEarningsResponse {
   modelId: string;
@@ -39,7 +41,7 @@ export async function GET(request: Request) {
   const metricType = searchParams.get("metricType") ?? "net";
 
   const range = getFanvuePeriodRange(period);
-  const mult = metricType === "gross" ? NET_TO_GROSS : 1;
+  const mult = metricType === "gross" ? 1 : GROSS_TO_NET;
 
   const rows = await prisma.inflowwCreatorDailyEarnings.findMany({
     where: {
