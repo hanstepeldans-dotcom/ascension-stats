@@ -15,5 +15,10 @@ export async function register() {
     // No-op when INFLOWW_API_KEY / INFLOWW_AGENCY_OID are not set.
     const { startInflowwScheduler } = await import("./lib/infloww/scheduler");
     startInflowwScheduler();
+
+    // Start the Fanvue background sync (every FANVUE_SYNC_INTERVAL_MS, default 5 min).
+    // No-op when no Fanvue connection is CONNECTED.
+    const { startFanvueScheduler } = await import("./lib/fanvue/scheduler");
+    startFanvueScheduler();
   }
 }
