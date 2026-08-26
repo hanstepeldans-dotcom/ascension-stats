@@ -306,14 +306,11 @@ export async function runFanvueSync(
     fanvueUuidToCreatorId.set(c.fanvueUuid, creator.id);
   }
 
-  // Clear existing data for this period so partial syncs can't corrupt stored totals.
-  // We delete only after successfully obtaining the creators list.
-  await prisma.fanvueCreatorDailyEarnings.deleteMany({
-    where: { creator: { userId }, date: { gte: range.startDateUtc, lte: range.endDateUtc } },
-  });
-  await prisma.agencyDailyRevenue.deleteMany({
-    where: { userId, date: { gte: range.startDateUtc, lte: range.endDateUtc } },
-  });
+  // NOTE: we intentionally do NOT bulk-delete the range up front. Doing so left a
+  // window on every 5-min sync where the dashboard could read partial/zero data.
+  // Instead each creator upserts its fresh days in place, then removes only its own
+  // now-stale days (see below). agencyDailyRevenue isn't read by the overview/chart,
+  // so it's simply re-upserted at the end.
 
   // ── Launch all creators concurrently ──────────────────────────────────────
   const creatorTasks = parsedCreators.map(async (c): Promise<CreatorTaskResult> => {
@@ -352,10 +349,14 @@ export async function runFanvueSync(
       if (earningsPageToken) await sleep(DELAY_BETWEEN_PAGES_MS);
     } while (earningsPageToken);
 
-    // Write this creator's rows to DB (runs concurrently with other creators; different rows → no conflict)
+    // Upsert this creator's fresh days IN PLACE (data stays present throughout the
+    // sync — no delete-then-insert window). Runs concurrently with other creators;
+    // different rows → no conflict.
     let dailyRowsUpserted = 0;
+    const freshDates: Date[] = [];
     for (const [dateStr, agg] of byDay) {
       const date = toDateOnly(dateStr);
+      freshDates.push(date);
       await prisma.fanvueCreatorDailyEarnings.upsert({
         where: { creatorId_date: { creatorId, date } },
         create: { creatorId, date, total: round2(agg.total), messages: round2(agg.messages), tips: round2(agg.tips), subscriptions: round2(agg.subscriptions) },
@@ -363,6 +364,17 @@ export async function runFanvueSync(
       });
       dailyRowsUpserted++;
     }
+
+    // Remove only this creator's now-stale days in the range (e.g. a day that
+    // dropped to zero after refunds). Fresh days were just written, so real data
+    // is never absent. A creator whose fetch FAILED never reaches here, so its
+    // last-good data is preserved instead of being wiped.
+    await prisma.fanvueCreatorDailyEarnings.deleteMany({
+      where: {
+        creatorId,
+        date: { gte: range.startDateUtc, lte: range.endDateUtc, notIn: freshDates },
+      },
+    });
 
     return { fanvueUuid: c.fanvueUuid, revenueCentsByDate, pagesFetched, chunksProcessed: 0, dailyRowsUpserted };
   });
