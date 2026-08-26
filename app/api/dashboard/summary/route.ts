@@ -35,7 +35,9 @@ export async function GET(request: Request) {
 
   const period = PERIOD_MAP[periodParam] ?? "week";
   const range = getFanvuePeriodRange(period);
-  const mult = metricType === "gross" ? NET_TO_GROSS : 1;
+  // Fanvue rows store NET → gross = net × 1.25. Infloww rows store GROSS → net = gross × 0.8.
+  const fanvueMult = metricType === "gross" ? NET_TO_GROSS : 1;
+  const inflowwMult = metricType === "gross" ? 1 : 1 / NET_TO_GROSS;
 
   // Fanvue aggregation
   const fanvueAgg = await prisma.fanvueCreatorDailyEarnings.aggregate({
@@ -84,25 +86,25 @@ export async function GET(request: Request) {
   const inflowwStreams = Number(inflowwAgg._sum.streams ?? 0);
 
   return NextResponse.json({
-    totalEarnings: round((fanvueTotal + inflowwTotal) * mult),
-    subscriptions: round((fanvueSubscriptions + inflowwSubscriptions) * mult),
-    posts: round(inflowwPosts * mult),
-    messages: round((fanvueMessages + inflowwMessages) * mult),
-    tips: round((fanvueTips + inflowwTips) * mult),
-    referrals: round(inflowwReferrals * mult),
-    streams: round(inflowwStreams * mult),
+    totalEarnings: round(fanvueTotal * fanvueMult + inflowwTotal * inflowwMult),
+    subscriptions: round(fanvueSubscriptions * fanvueMult + inflowwSubscriptions * inflowwMult),
+    posts: round(inflowwPosts * inflowwMult),
+    messages: round(fanvueMessages * fanvueMult + inflowwMessages * inflowwMult),
+    tips: round(fanvueTips * fanvueMult + inflowwTips * inflowwMult),
+    referrals: round(inflowwReferrals * inflowwMult),
+    streams: round(inflowwStreams * inflowwMult),
     // breakdown for transparency
     fanvue: {
-      total: round(fanvueTotal * mult),
-      messages: round(fanvueMessages * mult),
-      tips: round(fanvueTips * mult),
-      subscriptions: round(fanvueSubscriptions * mult),
+      total: round(fanvueTotal * fanvueMult),
+      messages: round(fanvueMessages * fanvueMult),
+      tips: round(fanvueTips * fanvueMult),
+      subscriptions: round(fanvueSubscriptions * fanvueMult),
     },
     infloww: {
-      total: round(inflowwTotal * mult),
-      messages: round(inflowwMessages * mult),
-      tips: round(inflowwTips * mult),
-      subscriptions: round(inflowwSubscriptions * mult),
+      total: round(inflowwTotal * inflowwMult),
+      messages: round(inflowwMessages * inflowwMult),
+      tips: round(inflowwTips * inflowwMult),
+      subscriptions: round(inflowwSubscriptions * inflowwMult),
     },
   });
 }
