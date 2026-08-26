@@ -30,6 +30,10 @@ export default function DashboardPage() {
   const { data: summaryData } = useQuery({
     queryKey: ["dashboard-summary", timeRange, metricType],
     staleTime: 0,
+    // Auto-poll so always-on displays (e.g. a TV) update without interaction.
+    // refetchIntervalInBackground is required: a TV tab is never "focused".
+    refetchInterval: 60_000,
+    refetchIntervalInBackground: true,
     queryFn: async () => {
       const res = await fetch(
         `/api/dashboard/summary?period=${timeRange}&metricType=${metricType}`,
@@ -55,6 +59,8 @@ export default function DashboardPage() {
   const { data: dashboardRevenue } = useQuery({
     queryKey: ["dashboard-revenue", currentYear, currentMonth, metricType],
     staleTime: 0,
+    refetchInterval: 60_000,
+    refetchIntervalInBackground: true,
     queryFn: async () => {
       const res = await fetch(
         `/api/dashboard/revenue?year=${currentYear}&month=${currentMonth}&metricType=${metricType}`,

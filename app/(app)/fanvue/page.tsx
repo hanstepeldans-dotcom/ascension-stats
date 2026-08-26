@@ -78,6 +78,8 @@ export default function FanvuePage() {
 
   const { data: summaryData } = useQuery({
     queryKey: ["fanvue", "summary", period, metricType],
+    refetchInterval: 60_000,
+    refetchIntervalInBackground: true,
     queryFn: async () => {
       const res = await fetch(
         `/api/fanvue/summary?period=${period}&metricType=${metricType}`
@@ -110,6 +112,8 @@ export default function FanvuePage() {
 
   const { data: modelsData } = useQuery({
     queryKey: ["fanvue", "earnings-by-model", period, metricType],
+    refetchInterval: 60_000,
+    refetchIntervalInBackground: true,
     queryFn: async () => {
       const res = await fetch(
         `/api/fanvue/earnings-by-model?period=${period}&metricType=${metricType}`

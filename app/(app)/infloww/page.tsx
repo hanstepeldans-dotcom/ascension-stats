@@ -57,6 +57,8 @@ export default function InflowwPage() {
     // staleTime:0 ensures every period/metricType switch re-fetches immediately
     // rather than serving a 60-second-old cached result from the global QueryClient.
     staleTime: 0,
+    refetchInterval: 60_000,
+    refetchIntervalInBackground: true,
     queryFn: async () => {
       const res = await fetch(
         `/api/infloww/summary?period=${period}&metricType=${metricType}`,
@@ -76,6 +78,8 @@ export default function InflowwPage() {
   const { data: modelsData } = useQuery({
     queryKey: ["infloww", "earnings-by-model", period, metricType],
     staleTime: 0,
+    refetchInterval: 60_000,
+    refetchIntervalInBackground: true,
     queryFn: async () => {
       const res = await fetch(
         `/api/infloww/earnings-by-model?period=${period}&metricType=${metricType}`,
