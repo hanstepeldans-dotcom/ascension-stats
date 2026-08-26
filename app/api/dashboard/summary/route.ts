@@ -35,8 +35,8 @@ export async function GET(request: Request) {
 
   const period = PERIOD_MAP[periodParam] ?? "week";
   const range = getFanvuePeriodRange(period);
-  // Fanvue rows store NET → gross = net × 1.25. Infloww rows store GROSS → net = gross × 0.8.
-  const fanvueMult = metricType === "gross" ? NET_TO_GROSS : 1;
+  // Both Fanvue and Infloww rows now store GROSS. Net = gross × 0.8 (20% cut).
+  const fanvueMult = metricType === "gross" ? 1 : 1 / NET_TO_GROSS;
   const inflowwMult = metricType === "gross" ? 1 : 1 / NET_TO_GROSS;
 
   // Fanvue aggregation

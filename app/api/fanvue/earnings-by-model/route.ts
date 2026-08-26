@@ -4,7 +4,8 @@ import { authOptions } from "@/lib/auth/config";
 import { prisma } from "@/lib/db";
 import { getFanvuePeriodRange, type FanvuePeriod } from "@/lib/time/fanvue-range";
 
-const NET_TO_GROSS = 1.25;
+// Fanvue rows store GROSS (real gross from the API). Net = gross minus the 20% cut.
+const GROSS_TO_NET = 0.8;
 
 export interface ModelEarningsResponse {
   modelId: string;
@@ -32,7 +33,7 @@ export async function GET(request: Request) {
 
   const range = getFanvuePeriodRange(period);
 
-  const mult = metricType === "gross" ? NET_TO_GROSS : 1;
+  const mult = metricType === "gross" ? 1 : GROSS_TO_NET;
 
   const creators = await prisma.fanvueCreator.findMany({
     where: { userId: session.user.id },

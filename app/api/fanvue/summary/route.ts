@@ -10,7 +10,8 @@ import { authOptions } from "@/lib/auth/config";
 import { prisma } from "@/lib/db";
 import { getFanvuePeriodRange, type FanvuePeriod } from "@/lib/time/fanvue-range";
 
-const NET_TO_GROSS = 1.25;
+// Fanvue rows store GROSS (real gross from the API). Net = gross minus the 20% cut.
+const GROSS_TO_NET = 0.8;
 
 const PERIOD_MAP: Record<string, FanvuePeriod> = {
   today: "today",
@@ -31,7 +32,7 @@ export async function GET(request: Request) {
 
   const period = PERIOD_MAP[periodParam] ?? "week";
   const range = getFanvuePeriodRange(period);
-  const mult = metricType === "gross" ? NET_TO_GROSS : 1;
+  const mult = metricType === "gross" ? 1 : GROSS_TO_NET;
 
   const agg = await prisma.fanvueCreatorDailyEarnings.aggregate({
     where: {

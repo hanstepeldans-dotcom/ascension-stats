@@ -188,11 +188,13 @@ function parseEarningsItems(
     if (!item || typeof item !== "object") continue;
     const obj = item as Record<string, unknown>;
     const dateRaw = obj.date ?? obj.createdAt ?? obj.periodStart ?? obj.paidAt;
+    // Store GROSS (what the fan paid). Fanvue returns the real `gross` per
+    // transaction, so no net×1.25 estimate is needed. Net = gross × 0.8 at display.
     const amountCents =
-      typeof obj.net       === "number" ? obj.net       :
-      typeof obj.netAmount === "number" ? obj.netAmount :
+      typeof obj.gross     === "number" ? obj.gross     :
       typeof obj.amount    === "number" ? obj.amount    :
-      Number(obj.net) || Number(obj.amount) || 0;
+      typeof obj.net       === "number" ? obj.net       :
+      Number(obj.gross) || Number(obj.amount) || Number(obj.net) || 0;
     if (!dateRaw || Number.isNaN(amountCents)) continue;
     const date = new Date(dateRaw as string);
     if (Number.isNaN(date.getTime())) continue;
