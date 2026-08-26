@@ -14,6 +14,7 @@
 
 import { prisma } from "@/lib/db";
 import { runFanvueSync, type RunFanvueSyncResult } from "./run-sync";
+import { getFreshFanvueAccessToken, markFanvueError } from "./token";
 
 const PROVIDER = "FANVUE";
 const DEFAULT_INTERVAL_MS = 5 * 60 * 1000;
@@ -81,20 +82,22 @@ export async function runFanvueSyncNow(): Promise<RunFanvueSyncResult[] | null> 
   s.status.lastError = null;
   try {
     const connections = await prisma.providerConnection.findMany({
-      where: { provider: PROVIDER, status: "CONNECTED", NOT: { accessToken: null } },
-      select: { userId: true, accessToken: true },
+      where: { provider: PROVIDER, status: "CONNECTED", NOT: { refreshToken: null } },
+      select: { id: true, userId: true },
     });
 
     const results: RunFanvueSyncResult[] = [];
     let synced = 0;
     for (const conn of connections) {
-      if (!conn.accessToken) continue;
       try {
-        results.push(await runFanvueSync(conn.userId, conn.accessToken, SYNC_PERIOD));
+        // Fanvue tokens expire after ~1h — always refresh before syncing.
+        const accessToken = await getFreshFanvueAccessToken(conn.id);
+        results.push(await runFanvueSync(conn.userId, accessToken, SYNC_PERIOD));
         synced++;
       } catch (err) {
         s.status.lastError = err instanceof Error ? err.message : String(err);
         console.error(`[fanvue-scheduler] sync failed for user ${conn.userId}:`, s.status.lastError);
+        await markFanvueError(conn.userId, s.status.lastError);
       }
     }
     s.status.connectionsSynced = synced;

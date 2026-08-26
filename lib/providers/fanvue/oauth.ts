@@ -184,6 +184,47 @@ function parseTokenResponse(raw: string): TokenResponse {
   };
 }
 
+/**
+ * Refresh an access token using a refresh_token grant. Fanvue access tokens live
+ * only ~1 hour, so long-running/background usage MUST refresh. Mirrors the code
+ * exchange's auth handling: PKCE/none first, then HTTP Basic on 401 invalid_client.
+ */
+export async function refreshFanvueTokens(
+  refreshToken: string
+): Promise<{ tokens: TokenResponse; authMethodUsed: TokenAuthMethod }> {
+  const env = getFanvueOAuthEnv();
+  const tokenUrl = env.tokenUrl;
+  const body = new URLSearchParams({
+    grant_type: "refresh_token",
+    client_id: env.clientId,
+    refresh_token: refreshToken,
+  }).toString();
+
+  const headersNone: Record<string, string> = { "Content-Type": "application/x-www-form-urlencoded" };
+  const res = await fetch(tokenUrl, { method: "POST", headers: headersNone, body });
+  const raw = await res.text();
+  if (res.ok) return { tokens: parseTokenResponse(raw), authMethodUsed: "none" };
+
+  const parsed = tryParseError(raw);
+  const isInvalidClient = res.status === 401 && parsed?.error === "invalid_client";
+  if (isInvalidClient && env.clientSecret) {
+    const basicAuth = Buffer.from(`${env.clientId}:${env.clientSecret}`).toString("base64");
+    const res2 = await fetch(tokenUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded", Authorization: `Basic ${basicAuth}` },
+      body,
+    });
+    const raw2 = await res2.text();
+    if (res2.ok) return { tokens: parseTokenResponse(raw2), authMethodUsed: "basic" };
+    const parsed2 = tryParseError(raw2);
+    const diagnostics = buildDiagnostics(res2, raw2, tokenUrl, "", "basic", true);
+    throw new TokenExchangeError(parsed2?.error ?? `Token refresh failed (${res2.status})`, diagnostics);
+  }
+
+  const diagnostics = buildDiagnostics(res, raw, tokenUrl, "", "none", isInvalidClient && !!env.clientSecret);
+  throw new TokenExchangeError(parsed?.error ?? `Token refresh failed (${res.status})`, diagnostics);
+}
+
 /** Exchange authorization code for tokens. Tries PKCE-only first; on 401 invalid_client, retries with HTTP Basic Auth (client_id:client_secret). */
 export async function exchangeCodeForTokens(
   code: string,

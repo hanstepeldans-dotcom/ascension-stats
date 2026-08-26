@@ -6,6 +6,7 @@ import { prisma } from "@/lib/db";
 import { FanvueApiError } from "@/lib/providers/fanvue/client";
 import type { FanvuePeriod } from "@/lib/time/fanvue-range";
 import { runFanvueSync, runFanvueRebuild } from "@/lib/fanvue/run-sync";
+import { getFreshFanvueAccessToken } from "@/lib/fanvue/token";
 
 const PROVIDER = "FANVUE";
 
@@ -27,9 +28,9 @@ export async function POST(request: Request) {
     },
   });
 
-  if (!connection || connection.status !== "CONNECTED" || !connection.accessToken) {
+  if (!connection || connection.status !== "CONNECTED" || !connection.refreshToken) {
     return NextResponse.json(
-      { error: "Fanvue not connected or no access token", ok: false },
+      { error: "Fanvue not connected or no refresh token", ok: false },
       { status: 400 }
     );
   }
@@ -38,7 +39,8 @@ export async function POST(request: Request) {
   const rebuild = url.searchParams.get("rebuild") === "1";
   const period = (url.searchParams.get("period") ?? "month") as FanvuePeriod;
   const userId = session.user.id;
-  const accessToken = connection.accessToken;
+  // Fanvue access tokens expire after ~1h — refresh before every sync.
+  const accessToken = await getFreshFanvueAccessToken(connection.id);
 
   try {
     const result = rebuild
