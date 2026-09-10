@@ -18,6 +18,18 @@ import { getFreshFanvueAccessToken, markFanvueError } from "./token";
 
 const PROVIDER = "FANVUE";
 const DEFAULT_INTERVAL_MS = 5 * 60 * 1000;
+
+/** True only for auth failures that genuinely need a reconnect (bad refresh token). */
+function isAuthError(msg: string): boolean {
+  const m = msg.toLowerCase();
+  return (
+    m.includes("invalid_grant") ||
+    m.includes("invalid_client") ||
+    m.includes("no fanvue refresh token") ||
+    m.includes("reconnect") ||
+    m.includes("token refresh failed")
+  );
+}
 const MIN_INTERVAL_MS = 60 * 1000;
 // "month" covers today + this week + this month in one pull.
 const SYNC_PERIOD = "month" as const;
@@ -81,8 +93,11 @@ export async function runFanvueSyncNow(): Promise<RunFanvueSyncResult[] | null> 
   s.status.lastStartedAt = new Date().toISOString();
   s.status.lastError = null;
   try {
+    // Retry ANY connection that still has a refresh token — including ones left in
+    // ERROR by a transient failure. A refresh token means we can recover on our own,
+    // so a one-off Fanvue 503/429 must not permanently disable auto-sync.
     const connections = await prisma.providerConnection.findMany({
-      where: { provider: PROVIDER, status: "CONNECTED", NOT: { refreshToken: null } },
+      where: { provider: PROVIDER, NOT: { refreshToken: null } },
       select: { id: true, userId: true },
     });
 
@@ -91,13 +106,19 @@ export async function runFanvueSyncNow(): Promise<RunFanvueSyncResult[] | null> 
     for (const conn of connections) {
       try {
         // Fanvue tokens expire after ~1h — always refresh before syncing.
+        // getFreshFanvueAccessToken sets status back to CONNECTED on success.
         const accessToken = await getFreshFanvueAccessToken(conn.id);
         results.push(await runFanvueSync(conn.userId, accessToken, SYNC_PERIOD));
         synced++;
       } catch (err) {
         s.status.lastError = err instanceof Error ? err.message : String(err);
         console.error(`[fanvue-scheduler] sync failed for user ${conn.userId}:`, s.status.lastError);
-        await markFanvueError(conn.userId, s.status.lastError);
+        // Only flag ERROR when the REFRESH itself failed (auth → needs reconnect).
+        // Transient downstream errors (503/429/network) are just logged and retried
+        // next cycle, so they never freeze the dashboard.
+        if (isAuthError(s.status.lastError)) {
+          await markFanvueError(conn.userId, s.status.lastError);
+        }
       }
     }
     s.status.connectionsSynced = synced;

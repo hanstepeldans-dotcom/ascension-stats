@@ -28,7 +28,9 @@ export async function POST(request: Request) {
     },
   });
 
-  if (!connection || connection.status !== "CONNECTED" || !connection.refreshToken) {
+  // Allow syncing whenever we have a refresh token — even if a transient error left
+  // the connection in ERROR — so a manual sync can recover it.
+  if (!connection || !connection.refreshToken) {
     return NextResponse.json(
       { error: "Fanvue not connected or no refresh token", ok: false },
       { status: 400 }
