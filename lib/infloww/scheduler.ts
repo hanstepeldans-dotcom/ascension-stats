@@ -81,7 +81,15 @@ export async function runInflowwSyncNow(opts?: {
   days?: number;
 }): Promise<RunInflowwSyncResult | null> {
   const s = state();
-  if (s.status.running) return null;
+  // Stuck-run guard: if a previous run is "running" but started too long ago, it
+  // hung (e.g. a wedged request) — take over instead of skipping forever. Without
+  // this, one stuck run silently disables all future syncs.
+  const MAX_RUN_MS = 15 * 60 * 1000;
+  if (s.status.running) {
+    const started = s.status.lastStartedAt ? Date.parse(s.status.lastStartedAt) : 0;
+    if (started && Date.now() - started < MAX_RUN_MS) return null;
+    console.warn("[infloww-scheduler] previous run appears stuck — taking over");
+  }
 
   s.status.running = true;
   s.status.lastStartedAt = new Date().toISOString();

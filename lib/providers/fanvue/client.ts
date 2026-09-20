@@ -34,6 +34,7 @@ export async function fanvueFetchRaw(
   const res = await fetch(url, {
     method: "GET",
     headers: getHeaders(accessToken),
+    signal: AbortSignal.timeout(30_000),
   });
 
   const contentType = res.headers.get("content-type") ?? "";

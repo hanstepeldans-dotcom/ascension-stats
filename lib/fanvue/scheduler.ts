@@ -87,7 +87,14 @@ export function getFanvueSyncStatus(): FanvueSyncStatus {
  */
 export async function runFanvueSyncNow(): Promise<RunFanvueSyncResult[] | null> {
   const s = state();
-  if (s.status.running) return null;
+  // Stuck-run guard: take over a run that's been "running" too long (it hung),
+  // rather than skipping every future run forever.
+  const MAX_RUN_MS = 15 * 60 * 1000;
+  if (s.status.running) {
+    const started = s.status.lastStartedAt ? Date.parse(s.status.lastStartedAt) : 0;
+    if (started && Date.now() - started < MAX_RUN_MS) return null;
+    console.warn("[fanvue-scheduler] previous run appears stuck — taking over");
+  }
 
   s.status.running = true;
   s.status.lastStartedAt = new Date().toISOString();

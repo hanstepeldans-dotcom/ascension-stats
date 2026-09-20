@@ -77,6 +77,8 @@ export async function inflowwFetch<T>(
     ? path
     : `${config.baseUrl}${path.startsWith("/") ? path : `/${path}`}`;
 
+  // Always time out — a hung request must never stall the sync (a stuck fetch
+  // previously froze the scheduler's run guard and stopped all future syncs).
   const res = await fetch(url, {
     method: "GET",
     headers: {
@@ -84,6 +86,7 @@ export async function inflowwFetch<T>(
       "x-oid": config.agencyOid,
       Accept: "application/json",
     },
+    signal: AbortSignal.timeout(30_000),
   });
 
   const text = await res.text();
