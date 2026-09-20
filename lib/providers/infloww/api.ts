@@ -190,15 +190,18 @@ export async function listCreatorTransactions(
   const out: InflowwTransaction[] = [];
   let cursor: string | undefined;
   let guard = 0;
+  // Infloww now REQUIRES endTime (returns 400 "Parameter 'endTime' is required"
+  // when omitted), so always send it — default to now.
+  const endTime = endTimeMs ?? Date.now();
 
   do {
     const q = new URLSearchParams({
       creatorId,
       startTime: String(startTimeMs),
+      endTime: String(endTime),
       limit: String(PAGE_LIMIT),
       platformCode,
     });
-    if (endTimeMs != null) q.set("endTime", String(endTimeMs));
     if (cursor) q.set("cursor", cursor);
     const env = await inflowwFetch<TransactionsData>(`/v1/transactions?${q}`, config);
     const list = env.data?.list ?? [];

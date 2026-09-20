@@ -148,7 +148,15 @@ export async function runInflowwSync(
 
     let byDay: Map<string, DayAgg>;
     try {
-      const txns = await listCreatorTransactions(creator.id, startTimeMs, undefined, config);
+      // Infloww caps each query at ~31 days, so fetch the window in ≤30-day chunks.
+      const CHUNK_MS = 30 * 24 * 60 * 60 * 1000;
+      const nowMs = startedAt.getTime();
+      const txns: InflowwTransaction[] = [];
+      for (let cs = startTimeMs; cs < nowMs; cs += CHUNK_MS) {
+        const ce = Math.min(cs + CHUNK_MS, nowMs);
+        const part = await listCreatorTransactions(creator.id, cs, ce, config);
+        txns.push(...part);
+      }
       transactionsFetched += txns.length;
       byDay = aggregateTransactions(txns);
     } catch (err) {
