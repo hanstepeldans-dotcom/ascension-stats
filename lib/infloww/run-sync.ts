@@ -212,6 +212,29 @@ export async function runInflowwSync(
     await sleep(DELAY_BETWEEN_CREATORS_MS);
   }
 
+  // Remove stale rows for creators that Infloww renamed/removed. Rows are keyed by
+  // creatorName, so a rename ("4 EMELY" → "2 EMELY") leaves the old-name row behind
+  // and the daily totals double-count. Delete any in-window row whose creatorName is
+  // not one of the current creators. Guarded on a non-empty creator list so a failed
+  // creators fetch can't wipe data (listAllCreators throws rather than returning []).
+  const currentNames = creators
+    .map((c) => (c.name ?? c.userName ?? c.id).trim())
+    .filter(Boolean);
+  if (currentNames.length > 0) {
+    const windowStartDate = toDateOnly(
+      getLocalDateKey(new Date(startTimeMs), getBucharestOffsetMinutes(new Date(startTimeMs)))
+    );
+    for (const userId of uniqueUserIds) {
+      await prisma.inflowwCreatorDailyEarnings.deleteMany({
+        where: {
+          userId,
+          date: { gte: windowStartDate },
+          creatorName: { notIn: currentNames },
+        },
+      });
+    }
+  }
+
   const finishedAt = new Date();
   const result: RunInflowwSyncResult = {
     ok: true,
