@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { LogOut } from "lucide-react";
 import { FullscreenButton } from "@/components/ui/fullscreen-button";
+import { MobileNav } from "./mobile-nav";
 
 interface TopbarProps {
   user?: { name?: string | null; email?: string | null } | null;
@@ -27,7 +28,8 @@ export function Topbar({ user }: TopbarProps) {
     : user?.email?.[0]?.toUpperCase() ?? "U";
 
   return (
-    <header className="flex h-14 items-center justify-between border-b border-white/[0.08] bg-black/40 px-4 backdrop-blur-xl">
+    <header className="flex h-14 items-center justify-between gap-2 border-b border-white/[0.08] bg-black/40 px-4 backdrop-blur-xl">
+      <MobileNav />
       <div className="flex-1" />
       <FullscreenButton />
       <DropdownMenu>

@@ -63,7 +63,10 @@ export function MonthlyRevenueChart({ data, className }: MonthlyRevenueChartProp
           />
           <XAxis
             dataKey="date"
-            interval={0}
+            // Thin the day labels to avoid overlap on narrow (phone) widths while
+            // still showing all of them on wide desktop/TV screens.
+            interval="preserveStartEnd"
+            minTickGap={16}
             tick={{ fontSize: 10, fill: "rgba(255,255,255,0.5)" }}
             tickFormatter={formatXDate}
             axisLine={{ stroke: "rgba(255,255,255,0.1)" }}

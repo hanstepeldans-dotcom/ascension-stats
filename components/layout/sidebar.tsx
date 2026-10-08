@@ -12,7 +12,7 @@ import {
 import { LogoMark } from "@/components/brand/LogoMark";
 import { cn } from "@/lib/utils";
 
-const navItems = [
+export const navItems = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/infloww", label: "Infloww", icon: BarChart3 },
   { href: "/fanvue", label: "Fanvue", icon: PieChart },
@@ -24,7 +24,8 @@ export function Sidebar() {
   const pathname = usePathname();
 
   return (
-    <aside className="flex h-full w-56 flex-col border-r border-white/[0.08] bg-black/40 backdrop-blur-xl">
+    // Hidden on phones — replaced by the MobileNav drawer (hamburger in the topbar).
+    <aside className="hidden h-full w-56 flex-col border-r border-white/[0.08] bg-black/40 backdrop-blur-xl md:flex">
       <div className="flex h-14 items-center gap-2 border-b border-white/[0.08] px-4">
         <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-pink to-pink-muted text-white">
           <LogoMark className="h-4 w-4" />

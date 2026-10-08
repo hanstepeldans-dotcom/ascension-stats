@@ -14,7 +14,7 @@ export default async function AppLayout({
       <Sidebar />
       <div className="relative z-10 flex flex-1 flex-col overflow-hidden">
         <Topbar user={session?.user} />
-        <main className="flex-1 overflow-y-auto p-6">{children}</main>
+        <main className="flex-1 overflow-y-auto p-4 sm:p-6">{children}</main>
       </div>
     </div>
   );
