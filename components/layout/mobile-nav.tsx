@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { createPortal } from "react-dom";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Menu, X } from "lucide-react";
@@ -16,6 +17,9 @@ import { navItems } from "./sidebar";
 export function MobileNav() {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => setMounted(true), []);
 
   // Close the drawer whenever the route changes.
   useEffect(() => {
@@ -41,8 +45,10 @@ export function MobileNav() {
         <Menu className="h-5 w-5" />
       </button>
 
-      {open && (
-        <div className="fixed inset-0 z-50 md:hidden">
+      {/* Portal to body so the Topbar's backdrop-blur (which turns `fixed` into a
+          containing block) doesn't trap/clip the full-screen drawer. */}
+      {open && mounted && createPortal(
+        <div className="fixed inset-0 z-[100] md:hidden">
           {/* Backdrop */}
           <div
             className="absolute inset-0 bg-black/60 backdrop-blur-sm"
@@ -90,7 +96,8 @@ export function MobileNav() {
               })}
             </nav>
           </aside>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );
